@@ -1,11 +1,15 @@
 site_name: Raiden
+site_url: https://tri-ml.github.io/raiden/
 site_description: Toolkit for policy learning with YAM bimanual robot arms
+repo_url: https://github.com/TRI-ML/raiden
+repo_name: TRI-ML/raiden
 docs_dir: docs
 
 theme:
   name: material
   logo: assets/logo.png
   favicon: assets/logo.png
+  homepage: https://tri-ml.github.io/raiden/
   features:
     - navigation.sections
     - navigation.indexes
@@ -27,6 +31,9 @@ theme:
 
 extra_css:
   - stylesheets/extra.css
+
+extra_javascript:
+  - javascripts/extra.js
 
 plugins:
   - search
