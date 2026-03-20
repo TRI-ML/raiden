@@ -1,0 +1,77 @@
+site_name: Raiden
+site_description: Toolkit for policy learning with YAM bimanual robot arms
+docs_dir: docs
+
+theme:
+  name: material
+  logo: assets/logo.png
+  favicon: assets/logo.png
+  features:
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - content.code.copy
+  palette:
+    - scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+    - scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+
+extra_css:
+  - stylesheets/extra.css
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            show_source: true
+            docstring_style: google
+
+nav:
+  - Introduction: index.md
+  - User Guide:
+    - guide/index.md
+    - Bill of Materials: guide/bom.md
+    - "1. Hardware Setup": guide/hardware.md
+    - "2. Installation": guide/installation.md
+    - "3. Quick Start": guide/quickstart.md
+    - "4. Calibration": guide/calibration.md
+    - "5. Console": guide/console.md
+    - "6. Recording": guide/recording.md
+    - "7. Conversion": guide/conversion.md
+    - "8. Shardify": guide/shardify.md
+    - "9. Replay": guide/replay.md
+    - "10. Visualization": guide/visualization.md
+    - Safety: guide/safety.md
+    - FAQ: guide/faq.md
+    - TensorRT (Fast Foundation Stereo): guide/tensorrt.md
+  - API Reference:
+    - api/index.md
+    - CLI: api/cli.md
+    - Cameras: api/cameras.md
+    - Camera Config: api/camera_config.md
+    - Recorder: api/recorder.md
+    - Converter: api/converter.md
+    - Visualizer: api/visualizer.md
+    - Calibration: api/calibration.md
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - admonition
+  - tables
+  - toc:
+      permalink: true
