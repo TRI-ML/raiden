@@ -1,0 +1,58 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "raiden"
+version = "0.1.0"
+description = "Toolkit for policy learning with YAM bimanual robot arms"
+readme = "README.md"
+license = { text = "CC-BY-NC-4.0" }
+requires-python = ">=3.11,<3.12"
+dependencies = [
+  "i2rt",
+  "mink>=0.0.13",
+  "numpy>=1.24",
+  "opencv-contrib-python>=4.8",
+  "scipy>=1.11",
+  "questionary>=2.0",
+  "pyrealsense2>=2.56.5.9235",
+  "rerun-sdk>=0.16",
+  "pyspacemouse>=1.0",
+  "pyroki",
+  "yourdfpy",
+  "jax",
+  "jaxlie",
+  "boto3>=1.42.66",
+  "tqdm>=4.64",
+  "torch>=2.10.0",
+  "textual>=8.1.1",
+  "pysondb>=1.6.1",
+  "onnxscript>=0.6.2",
+]
+
+[project.optional-dependencies]
+zed = ["pyzed"]
+realsense = ["pyrealsense2>=2.54"]
+ffs = ["onnxscript>=0.6.2", "omegaconf", "timm"]
+ffs-trt-cu12 = ["onnxscript>=0.6.2", "omegaconf", "timm", "tensorrt-cu12"]
+ffs-trt-cu13 = ["onnxscript>=0.6.2", "omegaconf", "timm", "tensorrt-cu13"]
+tri-stereo = ["onnxruntime-gpu>=1.18", "kornia>=0.7"]
+tri-stereo-trt-cu12 = ["kornia>=0.7", "tensorrt-cu12"]
+tri-stereo-trt-cu13 = ["kornia>=0.7", "tensorrt-cu13"]
+docs = [
+  "mkdocs>=1.5,<2.0",
+  "mkdocs-material>=9.0",
+  "mkdocstrings[python]>=0.24",
+]
+
+[project.scripts]
+rd = "raiden.cli:main"
+
+[tool.uv.sources]
+i2rt = { path = "third_party/i2rt" }
+pyzed = { path = "packages/pyzed-5.2-cp311-cp311-linux_x86_64.whl" }
+pyroki = { git = "https://github.com/chungmin99/pyroki.git" }
+
+[tool.ruff]
+exclude = ["third_party/"]

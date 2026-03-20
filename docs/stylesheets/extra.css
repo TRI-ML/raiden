@@ -1,0 +1,258 @@
+/* ── Logo size ─────────────────────────────────────────────────────────────── */
+.md-header__button.md-logo img {
+  height: 32px;
+  width: auto;
+  margin: 0.2rem;
+}
+
+/* ── Hide the auto-generated site-name home link at the top of the sidebar ── */
+.md-nav--primary .md-nav__title[for="__drawer"] {
+  display: none;
+}
+
+/* ── Dark mode (slate) — original cyberpunk palette ───────────────────────── */
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color:          #00d4ff;
+  --md-primary-fg-color--light:   #66e5ff;
+  --md-primary-fg-color--dark:    #0099cc;
+  --md-accent-fg-color:           #ff2d78;
+  --md-default-bg-color:          #080d1a;
+  --md-default-fg-color:          #c8d8f0;
+  --md-default-fg-color--light:   #7a9abf;
+  --md-default-fg-color--lighter: #4a6a8f;
+  --md-code-bg-color:             #0d1526;
+  --md-code-fg-color:             #a8d8ff;
+
+  --cp-neon-blue:  #00d4ff;
+  --cp-neon-pink:  #ff2d78;
+  --cp-header-bg:  #060b16;
+  --cp-dark-bg:    #080d1a;
+  --cp-mid-bg:     #0d1526;
+  --cp-surface:    #111c35;
+  --cp-border:     rgba(0, 212, 255, 0.2);
+  --cp-glow-h1:    0 0 16px rgba(0, 212, 255, 0.65);
+  --cp-glow-h2:    0 0 10px rgba(0, 212, 255, 0.45);
+  --cp-glow-nav:   0 0 8px  rgba(0, 212, 255, 0.6);
+  --cp-glow-title: 0 0 12px rgba(0, 212, 255, 0.7);
+  --cp-h3-color:   #66c8e8;
+  --cp-th-bg:      #0d1e3a;
+}
+
+/* ── Light mode (default) — light cyberpunk palette ───────────────────────── */
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color:          #007fa8;
+  --md-primary-fg-color--light:   #00aad4;
+  --md-primary-fg-color--dark:    #005c7a;
+  --md-accent-fg-color:           #c4005e;
+  --md-default-bg-color:          #e8f2fa;
+  --md-default-fg-color:          #091624;
+  --md-default-fg-color--light:   #2a4a6a;
+  --md-default-fg-color--lighter: #5a7a9a;
+  --md-code-bg-color:             #d8eaf6;
+  --md-code-fg-color:             #004466;
+
+  --cp-neon-blue:  #007fa8;
+  --cp-neon-pink:  #c4005e;
+  --cp-header-bg:  #d6e8f5;
+  --cp-dark-bg:    #e8f2fa;
+  --cp-mid-bg:     #d8eaf6;
+  --cp-surface:    #cce0f0;
+  --cp-border:     rgba(0, 127, 168, 0.25);
+  --cp-glow-h1:    0 0 10px rgba(0, 127, 168, 0.25);
+  --cp-glow-h2:    0 0 6px  rgba(0, 127, 168, 0.18);
+  --cp-glow-nav:   0 0 5px  rgba(0, 127, 168, 0.2);
+  --cp-glow-title: 0 0 8px  rgba(0, 127, 168, 0.3);
+  --cp-h3-color:   #005c7a;
+  --cp-th-bg:      #c0d8ee;
+}
+
+/* ── Base background ───────────────────────────────────────────────────────── */
+.md-main,
+.md-content,
+body {
+  background-color: var(--cp-dark-bg);
+}
+
+/* Scanline overlay — dark mode only */
+[data-md-color-scheme="slate"] body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 3px,
+    rgba(0, 212, 255, 0.018) 3px,
+    rgba(0, 212, 255, 0.018) 4px
+  );
+}
+
+/* ── Light mode header icons ───────────────────────────────────────────────── */
+[data-md-color-scheme="default"] .md-header__button,
+[data-md-color-scheme="default"] .md-search__icon {
+  color: var(--cp-neon-blue);
+}
+
+[data-md-color-scheme="default"] .md-header__button:hover,
+[data-md-color-scheme="default"] .md-search__icon:hover {
+  color: var(--md-primary-fg-color--dark);
+}
+
+/* ── Light mode GitHub source info ─────────────────────────────────────────── */
+[data-md-color-scheme="default"] .md-source {
+  color: var(--cp-neon-blue);
+}
+
+[data-md-color-scheme="default"] .md-source__fact {
+  color: var(--md-default-fg-color--light);
+}
+
+[data-md-color-scheme="default"] .md-source:hover {
+  color: var(--md-primary-fg-color--dark);
+}
+
+/* ── Header title spacing ──────────────────────────────────────────────────── */
+[dir=ltr] .md-header__title {
+  margin-left: 0.4rem;
+}
+
+/* ── Navigation bar ────────────────────────────────────────────────────────── */
+.md-header {
+  background: var(--cp-header-bg);
+  border-bottom: 1px solid var(--cp-border);
+  box-shadow: 0 0 18px var(--cp-border);
+}
+
+.md-header__title {
+  color: var(--cp-neon-blue);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-shadow: var(--cp-glow-title);
+}
+
+/* ── Sidebar ───────────────────────────────────────────────────────────────── */
+.md-sidebar,
+.md-nav {
+  background: var(--cp-dark-bg);
+}
+
+/* Top-level nav items: Introduction, User Guide, API Reference */
+.md-nav--primary > .md-nav__list > .md-nav__item > .md-nav__link {
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.md-nav__item--active > .md-nav__link {
+  color: var(--cp-neon-blue);
+  text-shadow: var(--cp-glow-nav);
+}
+
+.md-nav__link:hover {
+  color: var(--cp-neon-blue);
+}
+
+/* ── Content area ──────────────────────────────────────────────────────────── */
+.md-content__inner {
+  background: var(--cp-dark-bg);
+  color: var(--md-default-fg-color);
+}
+
+/* ── Headings ──────────────────────────────────────────────────────────────── */
+.md-content h1 {
+  color: var(--cp-neon-blue);
+  text-shadow: var(--cp-glow-h1);
+  border-bottom: 1px solid var(--cp-border);
+  padding-bottom: 0.25em;
+}
+
+.md-content h2 {
+  color: var(--cp-neon-blue);
+  text-shadow: var(--cp-glow-h2);
+}
+
+.md-content h3,
+.md-content h4 {
+  color: var(--cp-h3-color);
+}
+
+/* ── Links ─────────────────────────────────────────────────────────────────── */
+.md-content a {
+  color: var(--cp-neon-blue);
+}
+
+.md-content a:hover {
+  color: var(--cp-neon-pink);
+}
+
+/* ── Code blocks ───────────────────────────────────────────────────────────── */
+.md-typeset code,
+.md-typeset pre {
+  background: var(--cp-mid-bg);
+  color: var(--md-code-fg-color);
+  border: 1px solid var(--cp-border);
+}
+
+.md-typeset pre > code {
+  border: none;
+}
+
+.highlight {
+  background: var(--cp-mid-bg) !important;
+  border: 1px solid var(--cp-border);
+  border-radius: 4px;
+}
+
+/* ── Tables ────────────────────────────────────────────────────────────────── */
+.md-typeset table:not([class]) {
+  background: var(--cp-surface);
+  border: 1px solid var(--cp-border);
+}
+
+.md-typeset table:not([class]) th {
+  background: var(--cp-th-bg);
+  color: var(--cp-neon-blue);
+  border-bottom: 1px solid var(--cp-border);
+}
+
+.md-typeset table:not([class]) td {
+  border-top: 1px solid var(--cp-border);
+}
+
+.md-typeset table:not([class]) tr:hover {
+  background: rgba(0, 136, 187, 0.05);
+}
+
+/* ── Admonitions ───────────────────────────────────────────────────────────── */
+.md-typeset .admonition,
+.md-typeset details {
+  background: var(--cp-surface);
+  border: 1px solid var(--cp-border);
+  border-left: 4px solid var(--cp-neon-blue);
+}
+
+.md-typeset .admonition-title,
+.md-typeset summary {
+  background: rgba(0, 136, 187, 0.08);
+  color: var(--cp-neon-blue);
+}
+
+/* ── Search ────────────────────────────────────────────────────────────────── */
+.md-search__input {
+  background: var(--cp-mid-bg);
+  color: var(--md-default-fg-color);
+  border: 1px solid var(--cp-border);
+}
+
+.md-search__input::placeholder {
+  color: var(--md-default-fg-color--light);
+}
+
+/* ── Footer ────────────────────────────────────────────────────────────────── */
+.md-footer {
+  background: var(--cp-header-bg);
+  border-top: 1px solid var(--cp-border);
+}
