@@ -1,0 +1,4 @@
+weights/tri_stereo/*.pth filter=lfs diff=lfs merge=lfs -text
+weights/tri_stereo/*.onnx filter=lfs diff=lfs merge=lfs -text
+weights/tri_stereo/*.engine filter=lfs diff=lfs merge=lfs -text
+weights/tri_stereo/*.onnx.data filter=lfs diff=lfs merge=lfs -text

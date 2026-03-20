@@ -1,0 +1,90 @@
+site_name: Raiden
+site_url: https://tri-ml.github.io/raiden/
+site_description: Toolkit for policy learning with YAM bimanual robot arms
+repo_url: https://github.com/TRI-ML/raiden
+repo_name: TRI-ML/raiden
+docs_dir: docs
+
+theme:
+  name: material
+  logo: assets/logo.png
+  favicon: assets/logo.png
+  homepage: https://tri-ml.github.io/raiden/
+  features:
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - content.code.copy
+  palette:
+    - scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+    - scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+
+extra_css:
+  - stylesheets/extra.css
+
+extra_javascript:
+  - javascripts/extra.js
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            show_source: true
+            docstring_style: google
+
+nav:
+  - Introduction: index.md
+  - User Guide:
+    - guide/index.md
+    - Bill of Materials: guide/bom.md
+    - "1. Hardware Setup": guide/hardware.md
+    - "2. Installation":
+      - Setup: guide/installation.md
+      - TRI Stereo Depth: guide/tri_stereo.md
+      - Fast Foundation Stereo: guide/tensorrt.md
+    - "3. Quick Start": guide/quickstart.md
+    - "4. Calibration": guide/calibration.md
+    - "5. Console": guide/console.md
+    - "6. Recording": guide/recording.md
+    - "7. Conversion": guide/conversion.md
+    - "8. Shardify": guide/shardify.md
+    - "9. Replay": guide/replay.md
+    - "10. Visualization": guide/visualization.md
+    - Safety: guide/safety.md
+    - FAQ: guide/faq.md
+  - API Reference:
+    - api/index.md
+    - CLI: api/cli.md
+    - Cameras: api/cameras.md
+    - Camera Config: api/camera_config.md
+    - Recorder: api/recorder.md
+    - Converter: api/converter.md
+    - Visualizer: api/visualizer.md
+    - Calibration: api/calibration.md
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - attr_list
+  - admonition
+  - tables
+  - toc:
+      permalink: true
