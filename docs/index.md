@@ -100,7 +100,7 @@ The following features are coming soon:
 ```bibtex
 @misc{raiden2026,
   title  = {{RAIDEN}: A Toolkit for Policy Learning with {YAM} Bimanual Robot Arms},
-  author = {Iwase, Shun and Miller, Patrcik and Yao, Jonathan and Zakharov, Sergey},
+  author = {Iwase, Shun and Miller, Patrick and Yao, Jonathan and Zakharov, Sergey},
   year   = {2026},
 }
 ```
