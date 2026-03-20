@@ -57,7 +57,7 @@ across episodes, spawns per-episode threads for teleoperation, camera capture
 
 ### [`Converter`](converter.md)
 Offline post-processing step (`rd convert`). Reads raw SVO2/bag recordings,
-synchronises multi-camera streams by timestamp, extracts JPEG frames and depth
+synchronizes multi-camera streams by timestamp, extracts JPEG frames and depth
 maps, interpolates joint poses onto the camera timeline, and writes the
 per-frame `lowdim.npz` files that bundle intrinsics, per-frame extrinsics,
 the action vector, and the language instruction. Supports three depth backends:

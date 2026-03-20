@@ -12,7 +12,7 @@ Run `rd list_devices` to detect all connected cameras and generate a starter `~/
 }
 ```
 
-ZED Mini cameras are mounted on the follower arm wrist links via 3D-printed mounts. The ZED 2i is used as a fixed overhead or scene camera. Any Intel RealSense D400-series camera can be used as an alternative wrist or scene camera. The D405 in particular is well-suited for wrist mounting due to its compact form factor and close-range depth optimisation.
+ZED Mini cameras are mounted on the follower arm wrist links via 3D-printed mounts. The ZED 2i is used as a fixed overhead or scene camera. Any Intel RealSense D400-series camera can be used as an alternative wrist or scene camera. The D405 in particular is well-suited for wrist mounting due to its compact form factor and close-range depth optimization.
 
 <div style="display: flex; gap: 1rem;">
   <img src="https://tri-ml.github.io/raiden/assets/example_setup.jpg" style="width: 50%; object-fit: cover;">

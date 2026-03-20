@@ -189,7 +189,7 @@ class RealSenseCamera(Camera):
             self._clock_offset_ns = None
 
     def stop_recording(self) -> None:
-        """Restart pipeline without recorder to finalise the bag file."""
+        """Restart pipeline without recorder to finalize the bag file."""
         if self._pipeline:
             self._pipeline.stop()
         # Rebuild config without enable_record_to_file — there is no

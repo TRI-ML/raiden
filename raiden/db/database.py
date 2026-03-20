@@ -34,7 +34,7 @@ _EMPTY_DB = {"data": [], "nextId": 1}
 
 
 def _repair_file(path: Path) -> bool:
-    """Check *path* for valid JSON; if corrupt, back it up and reinitialise.
+    """Check *path* for valid JSON; if corrupt, back it up and reinitialize.
 
     Returns True if a repair was performed.
     """
@@ -55,7 +55,7 @@ def _repair_file(path: Path) -> bool:
             pass
         with open(path, "w") as f:
             json.dump(_EMPTY_DB, f, indent=3)
-        print(f"  [DB] Reinitialised {path.name} (data lost — see backup)")
+        print(f"  [DB] Reinitialized {path.name} (data lost — see backup)")
         return True
 
 

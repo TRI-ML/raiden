@@ -753,7 +753,7 @@ def run_shardify(
                     if raw is not None:
                         sample_files[f"{sample_uuid}.{out_cam}_{suffix}.jpg"] = raw
 
-            # ── serialise lowdim ─────────────────────────────────────────
+            # ── serialize lowdim ─────────────────────────────────────────
             buf = io.BytesIO()
             np.savez_compressed(buf, **lowdim)
             sample_files[f"{sample_uuid}.lowdim.npz"] = buf.getvalue()

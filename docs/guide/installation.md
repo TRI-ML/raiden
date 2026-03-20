@@ -15,7 +15,7 @@ cd raiden
 uv sync
 ```
 
-If you already cloned without `--recurse-submodules`, initialise the submodule manually:
+If you already cloned without `--recurse-submodules`, initialize the submodule manually:
 
 ```bash
 git submodule update --init

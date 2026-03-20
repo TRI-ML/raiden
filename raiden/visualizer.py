@@ -327,7 +327,7 @@ def visualize_recording(
                 depth_mm = np.load(depth_path)["depth"]  # uint16 H×W, mm
                 depth_m = depth_mm.astype(np.float32) / 1000.0
                 if img_rgb is not None:
-                    # Resize depth to match RGB so point cloud colours align
+                    # Resize depth to match RGB so point cloud colors align
                     depth_m = cv2.resize(
                         depth_m, (W_d, H_d), interpolation=cv2.INTER_NEAREST
                     )

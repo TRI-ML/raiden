@@ -375,7 +375,7 @@ def _stream_trajectories(
     """Connect to (or reuse) the robot, move to start, then stream joint trajectories.
 
     If *robot* is None a new ``RobotController`` is created and closed when
-    done.  Pass an already-initialised controller to avoid reconnecting.
+    done.  Pass an already-initialized controller to avoid reconnecting.
     """
     owns_robot = robot is None
     if owns_robot:
