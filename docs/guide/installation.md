@@ -4,15 +4,19 @@
 
 - Python 3.11+
 - [uv](https://docs.astral.sh/uv/) package manager
+- hidapi system library (required for SpaceMouse support):
+
+```bash
+sudo apt install libhidapi-hidraw0 libhidapi-libusb0
+```
 
 ## Install
 
-Clone the repository with submodules and sync dependencies with `uv`:
+Clone the repository with submodules:
 
 ```bash
 git clone --recurse-submodules git@github.com:TRI-ML/raiden.git
 cd raiden
-uv sync
 ```
 
 If you already cloned without `--recurse-submodules`, initialize the submodule manually:
@@ -35,15 +39,23 @@ then run the helper script to download the matching Python wheel:
 
 ```bash
 uv run python scripts/install_pyzed.py
-uv sync --extra zed
+uv tool install ".[zed]"
 ```
 
 This downloads `pyzed-*.whl` into `packages/` and updates `pyproject.toml` to
-reference it. `uv sync --extra zed` then installs it into the project environment.
+reference it. `uv tool install ".[zed]"` then reinstalls `rd` with ZED support.
 
-**Intel RealSense** - `pyrealsense2` is included as a core dependency and will be
-installed by `uv sync`. No additional SDK installation is required for most
-distributions.
+**SpaceMouse** - install a udev rule so the device is accessible without sudo:
+
+```bash
+sudo bash scripts/install_spacemouse_udev.sh
+sudo usermod -aG plugdev $USER
+```
+
+Log out and back in, then replug the SpaceMouse.
+
+**Intel RealSense** - `pyrealsense2` is included as a core dependency and installed
+automatically. No additional SDK installation is required for most distributions.
 
 ## Fast Foundation Stereo (optional)
 
@@ -60,10 +72,10 @@ uv run python scripts/install_ffs.py
 This clones the model source into `third_party/Fast-FoundationStereo`,
 creates a packaging shim, and installs it into the active environment.
 
-**2. Sync the `ffs` extra (TensorRT / ONNX dependencies):**
+**2. Reinstall `rd` with the `ffs` extra (TensorRT / ONNX dependencies):**
 
 ```bash
-uv sync --extra ffs
+uv tool install ".[ffs]"
 ```
 
 **3. Download the pretrained weights:**

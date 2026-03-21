@@ -80,9 +80,9 @@ def list_arms() -> list:
 def list_spacemice() -> list:
     try:
         import easyhid
-    except ImportError:
+        h = easyhid.Enumeration()
+    except (ImportError, Exception):
         return []
-    h = easyhid.Enumeration()
     seen: set = set()
     results = []
     for d in h.find():

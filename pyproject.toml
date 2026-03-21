@@ -19,6 +19,7 @@ dependencies = [
   "pyrealsense2>=2.56.5.9235",
   "rerun-sdk>=0.16",
   "pyspacemouse>=1.0",
+  "easyhid>=0.0.4",
   "pyroki",
   "yourdfpy",
   "jax",
