@@ -1,7 +1,7 @@
 # Raiden
 
 <link rel="stylesheet" href="https://cdn.plyr.io/3.7.8/plyr.css">
-<video id="teaser" playsinline controls poster="https://tri-ml.github.io/raiden/assets/teaser_thumbnail.jpg">
+<video id="teaser" playsinline controls poster="https://s3.us-east-1.amazonaws.com/tri-ml-public.s3.amazonaws.com/github/raiden/teaser_thumbnail.jpg">
   <source src="https://s3.us-east-1.amazonaws.com/tri-ml-public.s3.amazonaws.com/github/raiden/teaser.mp4" type="video/mp4">
 </video>
 <script src="https://cdn.plyr.io/3.7.8/plyr.js"></script>

@@ -19,35 +19,45 @@ visualization.
 
 ## Installation
 
-**Install the `rd` command:**
+Clone the repository with submodules and install dependencies:
 
 ```bash
-uv tool install .
+git clone --recurse-submodules git@github.com:TRI-ML/raiden.git
+cd raiden
+uv sync
 ```
 
-**ZED cameras (optional)** — install the [ZED SDK](https://www.stereolabs.com/developers/), then:
+**ZED cameras** — install the [ZED SDK](https://www.stereolabs.com/developers/), then:
 
 ```bash
 uv run python scripts/install_pyzed.py
 uv sync --extra zed
 ```
 
-**TRI Stereo (optional)** — TRI's learned stereo depth model for ZED cameras:
+**TRI Stereo depth** — pull the ONNX model weights via Git LFS:
 
 ```bash
 git lfs install
 git lfs pull
-uv sync --extra mmt
 ```
 
-**Fast Foundation Stereo (optional)** — foundation model stereo depth for ZED cameras:
+**Fast Foundation Stereo** — foundation model stereo depth:
 
 ```bash
 uv run python scripts/install_ffs.py
-uv sync --extra ffs
 ```
 
-For TensorRT acceleration, see the [TensorRT guide](https://tri-ml.github.io/raiden/guide/tensorrt/).
+Install `rd` as a shell command:
+
+```bash
+uv tool install -e .                                                    # base install
+uv tool install -e ".[zed]"                                             # + ZED cameras
+uv tool install -e ".[zed,tri-stereo]"                                  # + TRI Stereo depth (ONNX)
+uv tool install -e ".[zed,tri-stereo,tri-stereo-trt-cu12]"              # + TensorRT (CUDA 12)
+uv tool install -e ".[zed,tri-stereo,tri-stereo-trt-cu13]"              # + TensorRT (CUDA 13)
+```
+
+For TensorRT acceleration, see the [documentation](https://tri-ml.github.io/raiden/guide/).
 
 ## Commands
 
