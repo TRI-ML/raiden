@@ -6,7 +6,12 @@ from pathlib import Path
 from typing import List, Optional
 
 
-def fzf_select(items: List[str], prompt: str, multi: bool = False) -> List[str]:
+def fzf_select(
+    items: List[str],
+    prompt: str,
+    multi: bool = False,
+    header: Optional[str] = None,
+) -> List[str]:
     """Pipe *items* to fzf and return the selected entries.
 
     Uses ``--multi`` when *multi=True* (Tab to toggle items).
@@ -14,7 +19,11 @@ def fzf_select(items: List[str], prompt: str, multi: bool = False) -> List[str]:
     """
     args = ["fzf", f"--prompt={prompt}", "--height=40%", "--layout=reverse", "--border"]
     if multi:
-        args += ["--multi", "--bind=tab:toggle"]
+        args += ["--multi", "--bind=tab:toggle", "--marker=● ", "--color=marker:#ffffff"]
+        default_header = "Tab: toggle  |  Enter: confirm  |  Esc: cancel"
+        args += [f"--header={header or default_header}", "--header-first"]
+    elif header:
+        args += [f"--header={header}", "--header-first"]
     result = subprocess.run(
         args,
         input="\n".join(items),

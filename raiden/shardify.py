@@ -282,7 +282,7 @@ def _build_window_arrays(
 
     out: Dict[str, np.ndarray] = {}
 
-    # ── action: (T, 26) EE poses ──────────────────────────────────────────
+    # ── action: (T, 13) single-arm or (T, 26) bimanual EE poses ──────────
     action_seq = _collect("action", 0, 26)
     if action_seq is not None:
         out[f"robot__action__poses__left::{R}__xyz"] = action_seq[:, 0:3]
@@ -290,23 +290,26 @@ def _build_window_arrays(
             action_seq[:, 3:12]
         )
         out[f"robot__action__grippers__left::{R}_hand"] = action_seq[:, 12:13]
-        out[f"robot__action__poses__right::{R}__xyz"] = action_seq[:, 13:16]
-        out[f"robot__action__poses__right::{R}__rot_6d"] = _rot9_to_rot6d(
-            action_seq[:, 16:25]
-        )
-        out[f"robot__action__grippers__right::{R}_hand"] = action_seq[:, 25:26]
+        if action_seq.shape[1] >= 26:
+            out[f"robot__action__poses__right::{R}__xyz"] = action_seq[:, 13:16]
+            out[f"robot__action__poses__right::{R}__rot_6d"] = _rot9_to_rot6d(
+                action_seq[:, 16:25]
+            )
+            out[f"robot__action__grippers__right::{R}_hand"] = action_seq[:, 25:26]
 
-    # ── joints: (T, 14) actual joint positions ────────────────────────────
+    # ── joints: (T, 7) single-arm or (T, 14) bimanual joint positions ────
     joints_seq = _collect("joints", 0, 14)
     if joints_seq is not None:
         out[f"robot__actual__joint_position__left::{R}"] = joints_seq[:, 0:7]
-        out[f"robot__actual__joint_position__right::{R}"] = joints_seq[:, 7:14]
+        if joints_seq.shape[1] >= 14:
+            out[f"robot__actual__joint_position__right::{R}"] = joints_seq[:, 7:14]
 
-    # ── action_joints: (T, 14) commanded joint positions ─────────────────
+    # ── action_joints: (T, 7) single-arm or (T, 14) bimanual commanded ───
     act_joints_seq = _collect("action_joints", 0, 14)
     if act_joints_seq is not None:
         out[f"robot__desired__joint_position__left::{R}"] = act_joints_seq[:, 0:7]
-        out[f"robot__desired__joint_position__right::{R}"] = act_joints_seq[:, 7:14]
+        if act_joints_seq.shape[1] >= 14:
+            out[f"robot__desired__joint_position__right::{R}"] = act_joints_seq[:, 7:14]
 
     # ── intrinsics / extrinsics ───────────────────────────────────────────
     anchor_frame = frames[anchor_idx]
@@ -554,35 +557,54 @@ def _resolve_output_cam_names(
 # ---------------------------------------------------------------------------
 
 
-def select_processed_task(data_dir: str = "data") -> Tuple[Path, List[Path]]:
-    """Use fzf to select a converted task.  Returns ``(task_dir, episode_dirs)``."""
+def select_processed_task(data_dir: str = "data") -> List[Tuple[Path, List[Path]]]:
+    """Use fzf to select one or more converted tasks.
+
+    Returns a list of ``(task_dir, episode_dirs)`` tuples for each selected task.
+    """
+    import sys  # noqa: PLC0415
+
     from raiden.utils import fzf_select  # noqa: PLC0415
 
     base = Path(data_dir) / "processed"
     task_dirs = sorted(
-        d
-        for d in base.iterdir()
-        if d.is_dir()
-        and any((ep / "metadata.json").exists() for ep in d.iterdir() if ep.is_dir())
+        (
+            d
+            for d in base.iterdir()
+            if d.is_dir()
+            and any((ep / "metadata.json").exists() for ep in d.iterdir() if ep.is_dir())
+        ),
+        key=lambda d: d.stat().st_mtime,
+        reverse=True,
     )
     if not task_dirs:
-        import sys  # noqa: PLC0415
-
         print(f"No converted tasks found in {base}")
         sys.exit(1)
 
+    _ALL_LABEL = "*** ALL TASKS ***"
     labels = {
         f"{d.name}  ({sum(1 for ep in d.iterdir() if ep.is_dir() and (ep / 'metadata.json').exists())} episode(s))": d
         for d in task_dirs
     }
-    chosen = fzf_select(list(labels), prompt="Shardify task> ")[0]
-    task_dir = labels[chosen]
-    episode_dirs = sorted(
-        ep
-        for ep in task_dir.iterdir()
-        if ep.is_dir() and (ep / "metadata.json").exists()
+    choices = [_ALL_LABEL] + list(labels)
+    selected = fzf_select(
+        choices,
+        prompt="Shardify task(s)> ",
+        multi=True,
+        header="Tab: toggle select  |  Enter: confirm  |  Select '*** ALL TASKS ***' to shardify everything",
     )
-    return task_dir, episode_dirs
+
+    chosen_dirs = task_dirs if _ALL_LABEL in selected else [labels[s] for s in selected]
+
+    result = []
+    for task_dir in chosen_dirs:
+        episode_dirs = sorted(
+            ep
+            for ep in task_dir.iterdir()
+            if ep.is_dir() and (ep / "metadata.json").exists()
+        )
+        result.append((task_dir, episode_dirs))
+    return result
 
 
 # ---------------------------------------------------------------------------

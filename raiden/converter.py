@@ -728,6 +728,18 @@ def _build_lowdim(
         action_parts = []
 
         # follower_*_joint_cmd is 7-DOF: arm joints (6) + gripper (1)
+        # Raise an error if the arm was recorded but cmd data is missing.
+        for _arm_key, _cmd_key in (
+            ("follower_l_joint_pos", "follower_l_joint_cmd"),
+            ("follower_r_joint_pos", "follower_r_joint_cmd"),
+        ):
+            if _arm_key in robot_data and _cmd_key not in robot_data:
+                raise ValueError(
+                    f"robot_data.npz contains '{_arm_key}' but is missing "
+                    f"'{_cmd_key}'. The recording has no commanded poses and "
+                    "cannot be converted. Re-record the episode."
+                )
+
         l_cmd = interp_to_cam("follower_l_joint_cmd")
         if l_cmd is not None:
             l_poses = np.stack(
@@ -866,16 +878,21 @@ def select_tasks(data_dir: str = "data") -> List[str]:
     """Use fzf to select one or more task directories (Tab to multi-select)."""
     base = Path(data_dir) / "raw"
     task_dirs = sorted(
-        d
-        for d in base.iterdir()
-        if d.is_dir()
-        and any((sub / "cameras").exists() for sub in d.iterdir() if sub.is_dir())
+        (
+            d
+            for d in base.iterdir()
+            if d.is_dir()
+            and any((sub / "cameras").exists() for sub in d.iterdir() if sub.is_dir())
+        ),
+        key=lambda d: d.stat().st_mtime,
+        reverse=True,
     )
 
     if not task_dirs:
         print(f"No tasks found in {base}")
         sys.exit(1)
 
+    _ALL_LABEL = "*** ALL TASKS ***"
     labels = {
         f"{d.name}  ({sum(1 for s in d.iterdir() if s.is_dir() and (s / 'cameras').exists())} recording(s))": d
         for d in task_dirs
@@ -883,7 +900,16 @@ def select_tasks(data_dir: str = "data") -> List[str]:
 
     from raiden.utils import fzf_select
 
-    selected = fzf_select(list(labels), prompt="Convert task(s)> ", multi=True)
+    choices = [_ALL_LABEL] + list(labels)
+    selected = fzf_select(
+        choices,
+        prompt="Convert task(s)> ",
+        multi=True,
+        header="Tab: toggle select  |  Enter: confirm  |  Select '*** ALL TASKS ***' to convert everything",
+    )
+
+    if _ALL_LABEL in selected:
+        return [str(d) for d in task_dirs]
     return [str(labels[s]) for s in selected]
 
 

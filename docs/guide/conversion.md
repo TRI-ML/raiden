@@ -10,8 +10,9 @@ a structured dataset directly consumable by policy-training frameworks.
 rd convert
 ```
 
-Running the command opens an interactive fzf selector to pick one or more tasks
-to convert (Tab to multi-select).
+Running the command opens an interactive fzf selector. Tasks are listed newest
+first. Use Tab to toggle individual tasks, Enter to confirm, or select
+`*** ALL TASKS ***` at the top to convert everything at once.
 
 By default `rd convert` reads from `./data/raw/` and writes to `./data/processed/`.
 Pass `--data-dir` to use a different root:

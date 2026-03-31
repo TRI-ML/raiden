@@ -457,42 +457,44 @@ def main():
             )
             from pathlib import Path as _Path
 
-            task_dir, episode_dirs = select_processed_task(command.data_dir)
-            print(f"Found {len(episode_dirs)} episodes in {task_dir}")
-
-            task_name = command.task_name or task_dir.name
-            s3_full_prefix = (
-                f"{command.s3_prefix}/{task_name}/shards" if command.s3_bucket else None
-            )
+            selected_tasks = select_processed_task(command.data_dir)
 
             resize: tuple | None = None
             if command.resize_images:
                 h, w = command.resize_images.split("x")
                 resize = (int(h), int(w))
 
-            cfg = ShardifyConfig(
-                output_dir=_Path(command.output_dir) / task_name,
-                past_lowdim_steps=command.past_lowdim_steps,
-                future_lowdim_steps=command.future_lowdim_steps,
-                max_padding_left=command.max_padding_left,
-                max_padding_right=command.max_padding_right,
-                samples_per_shard=command.samples_per_shard,
-                jpeg_quality=command.jpeg_quality,
-                resize_images_size=resize,
-                filter_still_samples=command.filter_still_samples,
-                still_threshold=command.still_threshold,
-                fail_on_nan=command.fail_on_nan,
-                stride=command.stride,
-                max_episodes_to_process=command.max_episodes,
-                num_workers=command.num_workers,
-                stats_stride=command.stats_stride,
-            )
-            run_shardify(
-                episode_dirs,
-                cfg,
-                s3_bucket=command.s3_bucket,
-                s3_prefix=s3_full_prefix,
-            )
+            for task_dir, episode_dirs in selected_tasks:
+                print(f"Found {len(episode_dirs)} episodes in {task_dir}")
+
+                task_name = command.task_name or task_dir.name
+                s3_full_prefix = (
+                    f"{command.s3_prefix}/{task_name}/shards" if command.s3_bucket else None
+                )
+
+                cfg = ShardifyConfig(
+                    output_dir=_Path(command.output_dir) / task_name,
+                    past_lowdim_steps=command.past_lowdim_steps,
+                    future_lowdim_steps=command.future_lowdim_steps,
+                    max_padding_left=command.max_padding_left,
+                    max_padding_right=command.max_padding_right,
+                    samples_per_shard=command.samples_per_shard,
+                    jpeg_quality=command.jpeg_quality,
+                    resize_images_size=resize,
+                    filter_still_samples=command.filter_still_samples,
+                    still_threshold=command.still_threshold,
+                    fail_on_nan=command.fail_on_nan,
+                    stride=command.stride,
+                    max_episodes_to_process=command.max_episodes,
+                    num_workers=command.num_workers,
+                    stats_stride=command.stats_stride,
+                )
+                run_shardify(
+                    episode_dirs,
+                    cfg,
+                    s3_bucket=command.s3_bucket,
+                    s3_prefix=s3_full_prefix,
+                )
 
         elif subcommand == "console":
             sys.argv.pop(1)

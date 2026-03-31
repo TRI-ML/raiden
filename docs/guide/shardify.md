@@ -10,8 +10,10 @@ ready for policy training.
 rd shardify
 ```
 
-Running the command opens an interactive fzf selector to pick which converted
-task to process.  To also upload the output to S3:
+Running the command opens an interactive fzf selector. Tasks are listed newest
+first. Use Tab to toggle individual tasks, Enter to confirm, or select
+`*** ALL TASKS ***` at the top to shardify everything at once. When multiple
+tasks are selected, each is shardified in sequence. To also upload the output to S3:
 
 ```bash
 rd shardify --s3-bucket my-robot-data

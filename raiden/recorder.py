@@ -43,9 +43,9 @@ from typing import Dict, List, Optional
 import boto3
 import numpy as np
 
+from raiden._config import CALIBRATION_FILE, CAMERA_CONFIG
 from raiden.camera_config import CameraConfig
 from raiden.cameras import Camera
-from raiden._config import CALIBRATION_FILE, CAMERA_CONFIG
 from raiden.db.database import get_db
 from raiden.robot.controller import RobotController
 from raiden.utils import fzf_select
@@ -308,13 +308,33 @@ class DemonstrationRecorder:
                     [data[jp_key].astype(np.float32), grip], axis=1
                 )
 
-            cmd_arr = [
-                f["cmd"].get(arm_key)
-                for f in self._robot_frames
-                if f["cmd"].get(arm_key) is not None
-            ]
-            if len(cmd_arr) == n:
-                data[f"{arm_key}_joint_cmd"] = np.stack(cmd_arr).astype(np.float32)
+            # Build cmd array, falling back to actual joint pos for frames
+            # where no command has been issued yet (e.g. the first few frames
+            # before the first teleop command is processed).
+            pos7d_key = f"{arm_key}_joint_pos_7d"
+            raw_cmds = [f["cmd"].get(arm_key) for f in self._robot_frames]
+            if jp_key in data:
+                # This arm was active — cmd data is required.
+                if not any(c is not None for c in raw_cmds):
+                    raise RuntimeError(
+                        f"No commanded positions recorded for {arm_key}. "
+                        "The teleop loop never issued a command to this arm."
+                    )
+                fallback = None
+                filled: list = []
+                for i, c in enumerate(raw_cmds):
+                    if c is not None:
+                        fallback = c
+                    if fallback is not None:
+                        filled.append(fallback)
+                    elif pos7d_key in data:
+                        filled.append(data[pos7d_key][i])
+                if len(filled) != n:
+                    raise RuntimeError(
+                        f"Could not build complete cmd array for {arm_key}: "
+                        f"got {len(filled)}/{n} frames."
+                    )
+                data[f"{arm_key}_joint_cmd"] = np.stack(filled).astype(np.float32)
 
         np.savez_compressed(output_file, **data)
         print(f"  ✓ Robot data saved  ({n} frames) → {output_file}")
