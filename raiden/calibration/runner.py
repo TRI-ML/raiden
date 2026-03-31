@@ -11,9 +11,8 @@ import numpy as np
 # Import kinematics from i2rt
 from i2rt.robots.kinematics import Kinematics
 
-from i2rt.robots.utils import ARM_YAM_XML_PATH as _ARM_YAM_XML_PATH
-
 from raiden._config import CALIBRATION_FILE, CALIBRATION_POSES_FILE, CAMERA_CONFIG
+from raiden._xml_paths import get_yam_4310_linear_xml_path
 
 from raiden.calibration.core import (
     CameraCalibrator,
@@ -181,7 +180,7 @@ def compute_forward_kinematics(
     # Initialize kinematics on first call (cached for subsequent calls)
     if _kinematics_cache is None:
         _kinematics_cache = Kinematics(
-            _ARM_YAM_XML_PATH, site_name="grasp_site"
+            get_yam_4310_linear_xml_path(), site_name="grasp_site"
         )
 
     # Ensure we have 6 DoF (without gripper)
@@ -632,7 +631,7 @@ class CalibrationRunner:
                                 global _kinematics_cache
                                 if _kinematics_cache is None:
                                     _kinematics_cache = Kinematics(
-                                        _ARM_YAM_XML_PATH,
+                                        get_yam_4310_linear_xml_path(),
                                         site_name="grasp_site",
                                     )
 
