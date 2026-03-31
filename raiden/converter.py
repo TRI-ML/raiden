@@ -839,6 +839,7 @@ def _build_sequence_metadata(
         "intrinsics": {"model": "pinhole"},
         "extrinsics": {"transform": "cam2world", "metric": True},
         "action": {"format": "joint_cmd", "dims": 14},
+        "control": rec_meta.get("control", "leader"),
     }
 
     with open(seq_dir / "metadata.json", "w") as f:

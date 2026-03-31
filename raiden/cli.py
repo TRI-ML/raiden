@@ -3,8 +3,8 @@
 
 import json
 import sys
-from dataclasses import dataclass
-from typing import Literal, Optional
+from dataclasses import dataclass, field
+from typing import List, Literal, Optional
 
 import tyro
 
@@ -87,6 +87,17 @@ class RecordCommand:
 
     arms: Literal["bimanual", "single"] = "bimanual"
     """Which arms to use: both (bimanual) or left arm only (single)"""
+
+
+@dataclass
+class ResetCanCommand:
+    """Reset CAN interfaces (bring down then up at the target bitrate)"""
+
+    interfaces: List[str] = field(default_factory=list)
+    """CAN interfaces to reset (default: all detected interfaces)"""
+
+    bitrate: int = 1000000
+    """CAN bitrate in bits/s (default: 1000000)"""
 
 
 @dataclass
@@ -282,6 +293,7 @@ def _print_help() -> None:
         "  shardify                    Export converted episodes to WebDataset shards"
     )
     print("  console                     Open the interactive metadata console (TUI)")
+    print("  reset_can                   Reset CAN interfaces (bring down then up)")
     print()
     print("Run 'rd <command> --help' for more information on a command.")
 
@@ -514,6 +526,31 @@ def main():
 
             app = RaidenConsole()
             app.run()
+
+        elif subcommand == "reset_can":
+            sys.argv.pop(1)
+            command = tyro.cli(
+                ResetCanCommand,
+                description="Reset CAN interfaces (bring down then up at the target bitrate)",
+            )
+            from raiden.robot.controller import list_can_interfaces, reset_can_interface
+
+            interfaces = command.interfaces or list_can_interfaces()
+            if not interfaces:
+                print("No CAN interfaces found.")
+                sys.exit(1)
+            print(f"Resetting {len(interfaces)} CAN interface(s) at {command.bitrate} bps...")
+            all_ok = True
+            for iface in interfaces:
+                ok = reset_can_interface(iface, bitrate=command.bitrate)
+                if ok:
+                    print(f"  ✓ {iface}")
+                else:
+                    all_ok = False
+            if all_ok:
+                print("Done.")
+            else:
+                sys.exit(1)
 
         else:
             _print_help()

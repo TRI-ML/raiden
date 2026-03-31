@@ -65,6 +65,7 @@ class RecordingMetadata:
     robot_hz: float
     cameras: List[str]
     camera_fps: int
+    control: str = "leader"
     complete: bool = False
     converted: bool = False
 
@@ -92,12 +93,14 @@ class DemonstrationRecorder:
         recording_dir: Path,
         task_name: str,
         task_instruction: str,
+        control: str = "leader",
     ):
         self.cameras = cameras
         self.robot_controller = robot_controller
         self.recording_dir = recording_dir
         self.task_name = task_name
         self.task_instruction = task_instruction
+        self.control = control
 
         self.cameras_dir = recording_dir / "cameras"
 
@@ -330,6 +333,7 @@ class DemonstrationRecorder:
             robot_hz=round(hz, 1),
             cameras=[c.name for c in self.cameras],
             camera_fps=30,
+            control=self.control,
             complete=complete,
             converted=False,
         )
@@ -405,7 +409,7 @@ def select_task() -> tuple[str, str]:
     tasks = db.get_tasks()
 
     _NEW = "<< Add new task >>"
-    labels = {f"{t['name']}  ({t['instruction']})": t for t in tasks}
+    labels = {f"{t['name']}  ({t['instruction']})": t for t in reversed(tasks)}
     chosen = fzf_select(list(labels) + [_NEW], prompt="Record task> ")[0]
 
     if chosen == _NEW:
@@ -433,7 +437,7 @@ def select_teacher() -> int:
     teachers = db.get_teachers()
 
     _NEW = "<< Add new teacher >>"
-    labels = [t["name"] for t in teachers] + [_NEW]
+    labels = [t["name"] for t in reversed(teachers)] + [_NEW]
     chosen = fzf_select(labels, prompt="Select teacher> ")[0]
 
     if chosen == _NEW:
@@ -786,7 +790,6 @@ def run_recording(
                 break
 
             if control == "spacemouse":
-                robot_controller.attach_spacemice(spacemouse_path_r, spacemouse_path_l)
                 robot_controller.warmup_spacemouse_ik()
 
             # Flush stdout so any SDK log output has time to drain before
@@ -829,8 +832,10 @@ def run_recording(
                 recording_dir=recording_dir,
                 task_name=task_name,
                 task_instruction=task_instruction,
+                control=control,
             )
             if control == "spacemouse":
+                robot_controller.attach_spacemice(spacemouse_path_r, spacemouse_path_l)
                 robot_controller.start_spacemouse_teleop(
                     vel_scale=vel_scale,
                     rot_scale=rot_scale,

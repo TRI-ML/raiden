@@ -114,8 +114,21 @@ before running Raiden.
 After each reboot, bring all CAN interfaces up with:
 
 ```bash
-sudo bash scripts/reset_all_can.sh
+rd reset_can
 ```
 
-This sets every detected `can*` interface to 1 Mbit/s and brings it UP. See
-the [FAQ](faq.md#scriptresetsallcansh) for details.
+This detects every `can*` interface visible to the OS, brings each one down,
+then back up at 1 Mbit/s.  It calls `sudo ip link set` internally, so you may
+be prompted for your password.
+
+To reset specific interfaces only:
+
+```bash
+rd reset_can --interfaces can_follower_l can_follower_r
+```
+
+To use a different bitrate:
+
+```bash
+rd reset_can --bitrate 500000
+```

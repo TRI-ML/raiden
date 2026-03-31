@@ -11,8 +11,9 @@ import numpy as np
 # Import kinematics from i2rt
 from i2rt.robots.kinematics import Kinematics
 
+from raiden._xml_paths import get_yam_4310_linear_xml_path as _get_combined_xml_path
+
 from raiden._config import CALIBRATION_FILE, CALIBRATION_POSES_FILE, CAMERA_CONFIG
-from raiden._xml_paths import get_yam_4310_linear_xml_path
 
 from raiden.calibration.core import (
     CameraCalibrator,
@@ -180,7 +181,7 @@ def compute_forward_kinematics(
     # Initialize kinematics on first call (cached for subsequent calls)
     if _kinematics_cache is None:
         _kinematics_cache = Kinematics(
-            get_yam_4310_linear_xml_path(), site_name="grasp_site"
+            _get_combined_xml_path(), site_name="grasp_site"
         )
 
     # Ensure we have 6 DoF (without gripper)
@@ -188,8 +189,12 @@ def compute_forward_kinematics(
         f"Expected 6 joint positions, got {len(joint_positions)}"
     )
 
+    # Pad to 8 DOF (combined arm+gripper XML); gripper joints don't affect grasp_site
+    q = np.zeros(8)
+    q[:6] = joint_positions
+
     # Compute forward kinematics (returns T_arm_base_to_ee)
-    T_arm_base_to_ee = _kinematics_cache.fk(joint_positions)
+    T_arm_base_to_ee = _kinematics_cache.fk(q)
 
     # Transform to left arm base frame
     if arm == "right":
@@ -631,11 +636,13 @@ class CalibrationRunner:
                                 global _kinematics_cache
                                 if _kinematics_cache is None:
                                     _kinematics_cache = Kinematics(
-                                        get_yam_4310_linear_xml_path(),
+                                        _get_combined_xml_path(),
                                         site_name="grasp_site",
                                     )
 
-                                robot_pose = _kinematics_cache.fk(actual_joint_pos[:6])
+                                q = np.zeros(8)
+                                q[:6] = actual_joint_pos[:6]
+                                robot_pose = _kinematics_cache.fk(q)
                                 camera_data[camera_name]["robot_poses"].append(
                                     robot_pose
                                 )

@@ -208,6 +208,44 @@ def smooth_move_joints(
         time.sleep(time_interval_s / steps)
 
 
+def list_can_interfaces() -> list[str]:
+    """Return all CAN interface names visible to the OS."""
+    result = subprocess.run(
+        ["ip", "-o", "link", "show"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    interfaces = []
+    for line in result.stdout.splitlines():
+        # Each line: "<index>: <name>: ..."
+        parts = line.split(":")
+        if len(parts) >= 2:
+            name = parts[1].strip().split("@")[0]  # strip e.g. "can0@..."
+            if name.startswith("can"):
+                interfaces.append(name)
+    return interfaces
+
+
+def reset_can_interface(interface: str, bitrate: int = 1000000) -> bool:
+    """Bring a CAN interface down then back up at the given bitrate.
+
+    Returns True on success, False on failure.
+    """
+    sudo = [] if os.geteuid() == 0 else ["sudo"]
+    for args in [
+        sudo + ["ip", "link", "set", interface, "down"],
+        sudo + ["ip", "link", "set", interface, "up", "type", "can", "bitrate", str(bitrate)],
+    ]:
+        result = subprocess.run(args, capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            print(f"  ✗ {' '.join(args)}")
+            if result.stderr:
+                print(f"    {result.stderr.strip()}")
+            return False
+    return True
+
+
 def check_can_interface(interface: str) -> bool:
     """Check if a CAN interface exists and is available"""
     try:

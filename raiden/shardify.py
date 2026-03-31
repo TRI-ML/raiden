@@ -677,6 +677,9 @@ def run_shardify(
         language_task = str(anchor_frame.get("language_task", ""))
         language_prompt = str(anchor_frame.get("language_prompt", ""))
         episode_id = ep_dir.name
+        with open(ep_dir / "metadata.json") as _mf:
+            _ep_meta = json.load(_mf)
+        control = _ep_meta.get("control", "leader")
         ep_samples = 0
 
         anchor_indices = list(range(0, n_frames, config.stride))
@@ -775,6 +778,7 @@ def run_shardify(
                 "camera_names": output_cam_names,
                 "original_episode_length": n_frames,
                 "is_padded": left_pad > 0 or right_pad > 0,
+                "control": control,
             }
             sample_files[f"{sample_uuid}.metadata.json"] = json.dumps(
                 sample_meta
