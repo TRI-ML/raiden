@@ -469,7 +469,9 @@ def main():
 
                 task_name = command.task_name or task_dir.name
                 s3_full_prefix = (
-                    f"{command.s3_prefix}/{task_name}/shards" if command.s3_bucket else None
+                    f"{command.s3_prefix}/{task_name}/shards"
+                    if command.s3_bucket
+                    else None
                 )
 
                 cfg = ShardifyConfig(
@@ -541,7 +543,9 @@ def main():
             if not interfaces:
                 print("No CAN interfaces found.")
                 sys.exit(1)
-            print(f"Resetting {len(interfaces)} CAN interface(s) at {command.bitrate} bps...")
+            print(
+                f"Resetting {len(interfaces)} CAN interface(s) at {command.bitrate} bps..."
+            )
             all_ok = True
             for iface in interfaces:
                 ok = reset_can_interface(iface, bitrate=command.bitrate)

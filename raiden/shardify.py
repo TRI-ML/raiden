@@ -572,7 +572,9 @@ def select_processed_task(data_dir: str = "data") -> List[Tuple[Path, List[Path]
             d
             for d in base.iterdir()
             if d.is_dir()
-            and any((ep / "metadata.json").exists() for ep in d.iterdir() if ep.is_dir())
+            and any(
+                (ep / "metadata.json").exists() for ep in d.iterdir() if ep.is_dir()
+            )
         ),
         key=lambda d: d.stat().st_mtime,
         reverse=True,

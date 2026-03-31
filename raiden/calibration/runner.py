@@ -180,9 +180,7 @@ def compute_forward_kinematics(
 
     # Initialize kinematics on first call (cached for subsequent calls)
     if _kinematics_cache is None:
-        _kinematics_cache = Kinematics(
-            _get_combined_xml_path(), site_name="grasp_site"
-        )
+        _kinematics_cache = Kinematics(_get_combined_xml_path(), site_name="grasp_site")
 
     # Ensure we have 6 DoF (without gripper)
     assert len(joint_positions) == 6, (

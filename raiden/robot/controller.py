@@ -235,7 +235,18 @@ def reset_can_interface(interface: str, bitrate: int = 1000000) -> bool:
     sudo = [] if os.geteuid() == 0 else ["sudo"]
     for args in [
         sudo + ["ip", "link", "set", interface, "down"],
-        sudo + ["ip", "link", "set", interface, "up", "type", "can", "bitrate", str(bitrate)],
+        sudo
+        + [
+            "ip",
+            "link",
+            "set",
+            interface,
+            "up",
+            "type",
+            "can",
+            "bitrate",
+            str(bitrate),
+        ],
     ]:
         result = subprocess.run(args, capture_output=True, text=True, check=False)
         if result.returncode != 0:

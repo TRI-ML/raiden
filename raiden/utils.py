@@ -19,7 +19,12 @@ def fzf_select(
     """
     args = ["fzf", f"--prompt={prompt}", "--height=40%", "--layout=reverse", "--border"]
     if multi:
-        args += ["--multi", "--bind=tab:toggle", "--marker=● ", "--color=marker:#ffffff"]
+        args += [
+            "--multi",
+            "--bind=tab:toggle",
+            "--marker=● ",
+            "--color=marker:#ffffff",
+        ]
         default_header = "Tab: toggle  |  Enter: confirm  |  Esc: cancel"
         args += [f"--header={header or default_header}", "--header-first"]
     elif header:
