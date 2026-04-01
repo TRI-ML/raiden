@@ -42,12 +42,40 @@ rd visualize --stride 2
 rd visualize --image-scale 1.0
 ```
 
+## Browser viewer (SSH tunnel)
+
+Pass `--web` to serve the viewer over HTTP instead of spawning the native
+desktop app.  This is useful when working over an SSH connection:
+
+```bash
+rd visualize --web
+```
+
+The command prints a URL and the SSH tunnel command to use:
+
+```
+Open in browser: http://localhost:9090?url=rerun%2Bhttp%3A%2F%2Flocalhost%3A9091%2Fproxy
+SSH tunnel:      ssh -L 9090:localhost:9090 -L 9091:localhost:9091 <host>
+```
+
+On your local machine, run the printed `ssh` command (or add the `-L` flags to
+your existing SSH session), then open the URL in a browser.  The process keeps
+running until you press **Ctrl-C**.
+
+The default web port is `9090`; change it with `--web-port`:
+
+```bash
+rd visualize --web --web-port 8080
+```
+
 ## Options
 
 | Option | Default | Description |
 |---|---|---|
 | `--stride` | `1` | Log every N-th frame |
 | `--image-scale` | `0.25` | Downsample factor applied to images and point clouds |
+| `--web` | `false` | Serve viewer over HTTP for browser access |
+| `--web-port` | `9090` | HTTP port for the web viewer |
 
 ## What is logged
 

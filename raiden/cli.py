@@ -200,6 +200,12 @@ class VisualizeCommand:
     image_scale: float = 0.25
     """Downsample factor for images and point clouds (default: 0.25)"""
 
+    web: bool = False
+    """Serve viewer over HTTP instead of spawning the native app (useful over SSH tunnel)"""
+
+    web_port: int = 9090
+    """HTTP port for the web viewer (default: 9090)"""
+
 
 @dataclass
 class ShardifyCommand:
@@ -485,6 +491,8 @@ def main():
                 episode=episode,
                 stride=command.stride,
                 image_scale=command.image_scale,
+                web=command.web,
+                web_port=command.web_port,
             )
 
         elif subcommand == "shardify":

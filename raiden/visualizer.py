@@ -122,6 +122,8 @@ def visualize_recording(
     stride: int = 1,
     image_scale: float = 0.25,
     frustum_scale: float = 0.1,
+    web: bool = False,
+    web_port: int = 9090,
 ) -> None:
     """Visualize a converted recording directory using Rerun.
 
@@ -143,6 +145,11 @@ def visualize_recording(
     frustum_scale:
         ``image_plane_distance`` passed to ``rr.Pinhole``; controls the rendered
         frustum size in the 3-D view (default: ``0.1``).
+    web:
+        Serve the viewer over HTTP instead of spawning the native desktop app.
+        Use this when connecting via SSH tunnel.
+    web_port:
+        HTTP port for the web viewer (default: ``9090``).
     """
     import rerun as rr
 
@@ -195,7 +202,21 @@ def visualize_recording(
         if _t is not None:
             T_left_from_right = np.array(_t, dtype=np.float64)
 
-    rr.init("raiden", spawn=True)
+    if web:
+        from urllib.parse import quote
+
+        rr.init("raiden")
+        grpc_port = web_port + 1
+        server_uri = rr.serve_grpc(grpc_port=grpc_port)
+        rr.serve_web_viewer(web_port=web_port, open_browser=False)
+        viewer_url = f"http://localhost:{web_port}?url={quote(server_uri, safe='')}"
+        print(f"\nOpen in browser: {viewer_url}")
+        print(
+            f"SSH tunnel:      ssh -L {web_port}:localhost:{web_port} -L {grpc_port}:localhost:{grpc_port} <host>"
+        )
+        print()
+    else:
+        rr.init("raiden", spawn=True)
 
     rr.log(
         "info",
@@ -406,4 +427,14 @@ def visualize_recording(
         if (log_idx + 1) % 20 == 0 or log_idx == len(frame_list) - 1:
             print(f"  {log_idx + 1:>4d}/{len(frame_list)}  (frame {frame_idx})")
 
-    print("Done. Rerun viewer should now be open.")
+    if web:
+        print("Done logging. Serving — press Ctrl-C to stop.")
+        try:
+            import time
+
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("\nStopped.")
+    else:
+        print("Done. Rerun viewer should now be open.")
