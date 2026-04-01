@@ -765,6 +765,39 @@ def _build_lowdim(
         if action_parts:
             action = np.concatenate(action_parts, axis=1)
 
+    # ── actual_poses: (N, 26) FK EE poses from actual joint positions ─────
+    # Same layout as action: [l_pos(3), l_rot9(9), l_grip(1), r_pos(3), r_rot9(9), r_grip(1)]
+    actual_poses: Optional[np.ndarray] = None
+    if joints is not None:
+        if kin is None:
+            kin = _get_kinematics()
+        actual_parts = []
+
+        l_pos = interp_to_cam("follower_l_joint_pos_7d")
+        if l_pos is not None:
+            l_actual_poses = np.stack(
+                [
+                    np.concatenate([T[:3, 3], T[:3, :3].flatten()]).astype(np.float32)
+                    for T in (_fk(kin, l_pos[i, :6]) for i in range(n_frames))
+                ]
+            )  # (N, 12)
+            actual_parts.append(l_actual_poses)
+            actual_parts.append(l_pos[:, 6:7])  # gripper
+
+        r_pos = interp_to_cam("follower_r_joint_pos_7d")
+        if r_pos is not None:
+            r_actual_poses = np.stack(
+                [
+                    np.concatenate([T[:3, 3], T[:3, :3].flatten()]).astype(np.float32)
+                    for T in (_fk(kin, r_pos[i, :6]) for i in range(n_frames))
+                ]
+            )  # (N, 12)  — in right-arm base frame
+            actual_parts.append(r_actual_poses)
+            actual_parts.append(r_pos[:, 6:7])  # gripper
+
+        if actual_parts:
+            actual_poses = np.concatenate(actual_parts, axis=1)
+
     # ── action_joints: (N, 14) commanded joint positions ─────────────────
     # Layout: [l_arm(6), l_gripper(1), r_arm(6), r_gripper(1)]
     action_joints_parts = [
@@ -795,6 +828,8 @@ def _build_lowdim(
             frame_data["joints"] = joints[i]
         if action is not None:
             frame_data["action"] = action[i]
+        if actual_poses is not None:
+            frame_data["actual_poses"] = actual_poses[i]
         if action_joints is not None:
             frame_data["action_joints"] = action_joints[i]
         frame_data["language_task"] = language_task
@@ -925,6 +960,7 @@ def convert_recording(
     ffs_scale: float = 1.0,
     ffs_iters: int = 8,
     tri_stereo_variant: str = "c64",
+    reconvert: bool = False,
 ) -> Dict[str, int]:
     """Convert a recording directory to UnifiedDataset format.
 
@@ -953,9 +989,14 @@ def convert_recording(
         sys.exit(1)
 
     seq_dir = Path(episode_dir) if episode_dir else rec_path / _SEQUENCE_NAME
-    if (seq_dir / "rgb").exists():
+    if (seq_dir / "rgb").exists() and not reconvert:
         print(f"Already converted: {seq_dir}")
         return {}
+    elif (seq_dir / "rgb").exists() and reconvert:
+        import shutil as _shutil
+
+        _shutil.rmtree(seq_dir)
+        print(f"Removed existing output: {seq_dir}")
 
     seq_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1121,6 +1162,20 @@ def convert_recording(
             k: (ts[:n_min] if ts is not None else None)
             for k, ts in cam_timestamps.items()
         }
+        # Delete any trailing image/depth files beyond n_min and update timestamps.npy
+        # so that rgb, depth, and lowdim always have exactly the same frame count.
+        for name, ts in cam_timestamps.items():
+            rgb_dir = seq_dir / "rgb" / name
+            depth_dir = seq_dir / "depth" / name
+            for idx in range(n_min, n_min + 100):  # clean up any trailing extras
+                for d, ext in ((rgb_dir, ".jpg"), (depth_dir, ".npz")):
+                    f = d / f"{idx:010d}{ext}"
+                    if f.exists():
+                        f.unlink()
+                    else:
+                        break
+            if ts is not None:
+                np.save(str(rgb_dir / "timestamps.npy"), ts)
 
     cameras = list(frame_counts.keys())
 
@@ -1274,6 +1329,7 @@ def convert_task(
             ffs_scale=ffs_scale,
             ffs_iters=ffs_iters,
             tri_stereo_variant=tri_stereo_variant,
+            reconvert=reconvert,
         )
 
         if counts:

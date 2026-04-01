@@ -263,6 +263,41 @@ class ShardifyCommand:
     """Number of worker processes (default: 1)"""
 
 
+@dataclass
+class ServeCommand:
+    """Start the chiral policy server"""
+
+    host: str = "0.0.0.0"
+    """WebSocket host to bind to"""
+
+    port: int = 8765
+    """WebSocket port to listen on"""
+
+    stereo_method: Literal["zed", "ffs", "tri_stereo"] = "zed"
+    """Depth backend: 'zed' (SDK NEURAL_LIGHT), 'ffs' (Fast Foundation Stereo), or 'tri_stereo' (TRI Stereo)"""
+
+    ffs_scale: float = 1.0
+    """Input resize scale for FFS inference (e.g. 0.5 halves resolution for speed)"""
+
+    ffs_iters: int = 8
+    """FFS update iterations (range 4–32)"""
+
+    tri_stereo_variant: Literal["c32", "c64"] = "c64"
+    """TRI Stereo model variant: 'c64' (higher quality) or 'c32' (faster)"""
+
+    max_joint_delta: float = 0.2
+    """Maximum allowed joint delta per policy step in radians before server aborts"""
+
+    action_type: Literal["joint", "ee_pose"] = "ee_pose"
+    """Action space: 'joint' (14-D joint positions, right then left) or 'ee_pose' (20-D EE poses, left then right, IK solved on-the-fly)"""
+
+    camera_config_file: str = ""
+    """Path to camera.json (default: ~/.config/raiden/camera.json)"""
+
+    calibration_file: str = ""
+    """Path to calibration_results.json (default: ~/.config/raiden/calibration_results.json)"""
+
+
 def _load_spacemouse_config(path: str = SPACEMOUSE_CONFIG) -> dict:
     try:
         with open(path) as f:
@@ -294,6 +329,9 @@ def _print_help() -> None:
     )
     print("  console                     Open the interactive metadata console (TUI)")
     print("  reset_can                   Reset CAN interfaces (bring down then up)")
+    print(
+        "  serve                       Start the chiral policy server for live inference"
+    )
     print()
     print("Run 'rd <command> --help' for more information on a command.")
 
@@ -557,6 +595,27 @@ def main():
                 print("Done.")
             else:
                 sys.exit(1)
+
+        elif subcommand == "serve":
+            sys.argv.pop(1)
+            command = tyro.cli(
+                ServeCommand,
+                description="Start the chiral policy server for live inference",
+            )
+            from raiden.server import run_server
+
+            run_server(
+                camera_config_file=command.camera_config_file,
+                calibration_file=command.calibration_file,
+                host=command.host,
+                port=command.port,
+                stereo_method=command.stereo_method,
+                ffs_scale=command.ffs_scale,
+                ffs_iters=command.ffs_iters,
+                tri_stereo_variant=command.tri_stereo_variant,
+                max_joint_delta=command.max_joint_delta,
+                action_type=command.action_type,
+            )
 
         else:
             _print_help()

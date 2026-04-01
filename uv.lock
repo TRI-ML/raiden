@@ -176,6 +176,18 @@ wheels = [
 ]
 
 [[package]]
+name = "chiral"
+version = "0.1.0"
+source = { git = "ssh://git@github.com/TRI-ML/chiral#c0b1387b2babfb44a9bfdf7144516425fdc5e012" }
+dependencies = [
+    { name = "eclipse-zenoh" },
+    { name = "msgpack" },
+    { name = "numpy" },
+    { name = "tqdm" },
+    { name = "websockets" },
+]
+
+[[package]]
 name = "click"
 version = "8.1.8"
 source = { registry = "https://pypi.org/simple" }
@@ -324,6 +336,20 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/e1/e3/6cbdea8c8869c53ee6ae95456f0e2bfc24c24bdff1be63e22febc780aa21/easyhid_ng-0.1.0.tar.gz", hash = "sha256:33ec11fecf10aecd015a6e0ef1d5682a21b30218b6b64edf63eba2aba06ef959", size = 7627, upload-time = "2026-01-17T01:09:58.023Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/6a/c6/9511d6eb3814d6ddedcc036b084e2268f0a4153d35fd3191209b8bf13a5b/easyhid_ng-0.1.0-py3-none-any.whl", hash = "sha256:71bbfb85b1fd824c109a5cb4d403bf0818293d52b8271589f30fb8ef19195657", size = 8051, upload-time = "2026-01-17T01:09:59.307Z" },
+]
+
+[[package]]
+name = "eclipse-zenoh"
+version = "1.8.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/c6/f9/22883e613eb193f8f956e8e96d8f16e39b369dac4ade7aa3b37f344ddc62/eclipse_zenoh-1.8.0.tar.gz", hash = "sha256:1cb0b8abdc522d58497c0cd7b8c8e7791f39d2c189c5e0bc80da8840af0ce24d", size = 164144, upload-time = "2026-03-13T20:35:58.12Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f1/87/8c49ee647c35443ba4d0c76dcc34be97a67caeafd240c3b756c600fe91c5/eclipse_zenoh-1.8.0-cp39-abi3-linux_armv6l.whl", hash = "sha256:b09657978c22e75ccc52a245665c88caea98948e7d961c0e57567d405001f716", size = 9966436, upload-time = "2026-03-13T20:35:31.354Z" },
+    { url = "https://files.pythonhosted.org/packages/6a/c9/e67ac2d1bcded39c5899017df38d68dfabaadcff1a334d97e30735dc5b30/eclipse_zenoh-1.8.0-cp39-abi3-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl", hash = "sha256:54297b9bb519974aaf318a5fef0f35101730143e53b334464b1c1cf536ec2080", size = 18668416, upload-time = "2026-03-13T20:35:34.43Z" },
+    { url = "https://files.pythonhosted.org/packages/77/5f/7d343fbba3ffbe67f4bb691493daf7cacd358b42549755bd3e635c5b2efa/eclipse_zenoh-1.8.0-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:4d1a12246d592ee86accf58d35967e12a35f2efca85b46dee90fc61831ce0d4e", size = 9567341, upload-time = "2026-03-13T20:35:37.237Z" },
+    { url = "https://files.pythonhosted.org/packages/c6/92/f8e40974cb2378294c8e650d791e93c107e7ac36a3efb2c6881ec864801f/eclipse_zenoh-1.8.0-cp39-abi3-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:ca624399b154a52fad3c466e91f02af018b002adb6f19e8b00abc1c0c94209d8", size = 9832427, upload-time = "2026-03-13T20:35:39.624Z" },
+    { url = "https://files.pythonhosted.org/packages/cf/ba/7bb452da75a6c3d40d512112e90aa9942996466051ebfb038c6dc41ed302/eclipse_zenoh-1.8.0-cp39-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:1aca875fd5aa38284cf7161964241a73b4e4090a48385c35a6d8e6169cc8e88a", size = 10018780, upload-time = "2026-03-13T20:35:42.27Z" },
+    { url = "https://files.pythonhosted.org/packages/86/5c/918e8a54ea1d33a58d46bbeb4e919af79b5a227a6a13462771981c208c95/eclipse_zenoh-1.8.0-cp39-abi3-win_amd64.whl", hash = "sha256:2eb1778bff7b92b8af2cc6ee0c5ac14fa0f84019e3dafc593cdd44f003fb5aac", size = 8590823, upload-time = "2026-03-13T20:35:45.409Z" },
 ]
 
 [[package]]
@@ -1880,6 +1906,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "boto3" },
+    { name = "chiral" },
     { name = "i2rt" },
     { name = "jax" },
     { name = "jaxlie" },
@@ -1945,6 +1972,7 @@ zed = [
 [package.metadata]
 requires-dist = [
     { name = "boto3", specifier = ">=1.42.66" },
+    { name = "chiral", git = "ssh://git@github.com/TRI-ML/chiral" },
     { name = "i2rt", directory = "third_party/i2rt" },
     { name = "jax" },
     { name = "jaxlie" },

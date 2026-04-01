@@ -54,18 +54,49 @@ sample is identified by a UUID and consists of four file types:
 
 ### `lowdim.npz` keys
 
+All right-arm keys are present only for **bimanual** episodes; they are absent for single-arm data.
+
+#### Action (commanded EE poses)
+
+FK applied to **commanded** joint positions (`follower_*_joint_cmd`).  This is what the
+policy should learn to predict.
+
 | Key | Shape | Description |
 |---|---|---|
-| `robot__action__poses__left::{robot}__xyz` | `(T, 3)` | Left EE position in left-arm-base frame |
-| `robot__action__poses__left::{robot}__rot_6d` | `(T, 6)` | Left EE rotation in 6D representation |
+| `robot__action__poses__left::{robot}__xyz` | `(T, 3)` | Left EE position, left-arm-base frame |
+| `robot__action__poses__left::{robot}__rot_6d` | `(T, 6)` | Left EE rotation, 6D representation |
 | `robot__action__grippers__left::{robot}_hand` | `(T, 1)` | Left gripper command |
-| `robot__action__poses__right::{robot}__xyz` | `(T, 3)` | Right EE position in left-arm-base frame |
-| `robot__action__poses__right::{robot}__rot_6d` | `(T, 6)` | Right EE rotation in 6D representation |
-| `robot__action__grippers__right::{robot}_hand` | `(T, 1)` | Right gripper command |
+| `robot__action__poses__right::{robot}__xyz` | `(T, 3)` | Right EE position, right-arm-base frame *(bimanual only)* |
+| `robot__action__poses__right::{robot}__rot_6d` | `(T, 6)` | Right EE rotation, 6D representation *(bimanual only)* |
+| `robot__action__grippers__right::{robot}_hand` | `(T, 1)` | Right gripper command *(bimanual only)* |
+
+#### Proprioception (actual EE poses)
+
+FK applied to **actual** measured joint positions (`follower_*_joint_pos_7d`).  Use these
+as the proprioceptive observation fed to the policy.
+
+| Key | Shape | Description |
+|---|---|---|
+| `robot__actual__poses__left::{robot}__xyz` | `(T, 3)` | Left actual EE position, left-arm-base frame |
+| `robot__actual__poses__left::{robot}__rot_6d` | `(T, 6)` | Left actual EE rotation, 6D representation |
+| `robot__actual__grippers__left::{robot}_hand` | `(T, 1)` | Left actual gripper position |
+| `robot__actual__poses__right::{robot}__xyz` | `(T, 3)` | Right actual EE position, right-arm-base frame *(bimanual only)* |
+| `robot__actual__poses__right::{robot}__rot_6d` | `(T, 6)` | Right actual EE rotation, 6D representation *(bimanual only)* |
+| `robot__actual__grippers__right::{robot}_hand` | `(T, 1)` | Right actual gripper position *(bimanual only)* |
+
+#### Joint positions
+
+| Key | Shape | Description |
+|---|---|---|
 | `robot__actual__joint_position__left::{robot}` | `(T, 7)` | Measured left joint positions (6 arm + 1 gripper) |
-| `robot__actual__joint_position__right::{robot}` | `(T, 7)` | Measured right joint positions |
+| `robot__actual__joint_position__right::{robot}` | `(T, 7)` | Measured right joint positions *(bimanual only)* |
 | `robot__desired__joint_position__left::{robot}` | `(T, 7)` | Commanded left joint positions |
-| `robot__desired__joint_position__right::{robot}` | `(T, 7)` | Commanded right joint positions |
+| `robot__desired__joint_position__right::{robot}` | `(T, 7)` | Commanded right joint positions *(bimanual only)* |
+
+#### Camera calibration and masks
+
+| Key | Shape | Description |
+|---|---|---|
 | `intrinsics.{cam}` | `(T, 3, 3)` | Pinhole camera matrix K (tiled from anchor frame) |
 | `extrinsics.{cam}` | `(T, 4, 4)` | Camera-to-world transform in left-arm-base frame |
 | `past_mask` | `(T,)` bool | `True` for past timesteps |
@@ -80,6 +111,24 @@ clamped (copy-padded).
 
 The rotation 6D representation uses the first two columns of the 3×3 rotation
 matrix (columns 0 and 1 of R, giving a (6,) vector per timestep).
+
+### vla_foundry config fields
+
+For a **single-arm** yam dataset:
+
+```yaml
+action_fields:
+  - robot__action__poses__left::yam__xyz
+  - robot__action__poses__left::yam__rot_6d
+  - robot__action__grippers__left::yam_hand
+
+proprioception_fields:
+  - robot__actual__poses__left::yam__xyz
+  - robot__actual__poses__left::yam__rot_6d
+  - robot__actual__grippers__left::yam_hand
+```
+
+For a **bimanual** yam dataset, add the corresponding `right` keys to both lists.
 
 ### `manifest.jsonl`
 

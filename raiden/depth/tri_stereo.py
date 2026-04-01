@@ -13,8 +13,9 @@ Model files
 -----------
 Model files are searched in order:
 
-1. ``<repo>/weights/tri_stereo/`` — tracked via git-lfs (canonical)
-2. ``~/.config/raiden/weights/tri_stereo/`` — user config fallback
+1. ``~/.config/raiden/weights/tri_stereo/`` — user config (subdirectory)
+2. ``~/.config/raiden/weights/`` — user config (flat layout)
+3. ``<repo>/weights/tri_stereo/`` — tracked via git-lfs (canonical)
 
 =============  ===========================
 Backend        Filename
@@ -33,10 +34,11 @@ from typing import Optional
 import cv2
 import numpy as np
 
-# Search order for model files: repo weights/ (git-lfs) first, then ~/.config/raiden.
+# Search order for model files.
 _SEARCH_DIRS = [
-    Path(__file__).parent.parent.parent / "weights" / "tri_stereo",
     Path.home() / ".config" / "raiden" / "weights" / "tri_stereo",
+    Path.home() / ".config" / "raiden" / "weights",
+    Path(__file__).parent.parent.parent / "weights" / "tri_stereo",
 ]
 
 

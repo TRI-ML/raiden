@@ -145,8 +145,9 @@ so every camera directory contains exactly the same number of frames.
 |---|---|---|
 | `intrinsics` | `dict[str → (3, 3) float32]` | `{camera_name: K}` — pinhole camera matrix `[[fx, 0, cx], [0, fy, cy], [0, 0, 1]]`. Principal point adjusted for upside-down cameras. |
 | `extrinsics` | `dict[str → (4, 4) float32]` | `{camera_name: T_cam2world}` in the **left\_arm\_base** frame for this frame. Scene cameras: static calibrated extrinsics. Wrist cameras: computed from forward kinematics + hand-eye calibration. |
-| `joints` | `(14,)` float32 | Follower joint positions at this frame: `[left_arm(6), left_gripper(1), right_arm(6), right_gripper(1)]`. |
+| `joints` | `(14,)` float32 | Follower **actual** joint positions at this frame: `[left_arm(6), left_gripper(1), right_arm(6), right_gripper(1)]`. |
 | `action` | `(26,)` float32 | FK EE poses computed from **commanded** joint positions (`follower_*_joint_cmd`): `[l_pos(3), l_rot9(9), l_gripper(1), r_pos(3), r_rot9(9), r_gripper(1)]`. Left arm pose is in the **left\_arm\_base** frame; right arm pose is in the **right\_arm\_base** frame. Rotation is the 3×3 matrix flattened row-major. |
+| `actual_poses` | `(26,)` float32 | FK EE poses computed from **actual** joint positions (`follower_*_joint_pos_7d`): same layout as `action`. Represents where the arm physically was, not where it was commanded to go. |
 | `action_joints` | `(14,)` float32 | Commanded joint positions: `[left_arm(6), left_gripper(1), right_arm(6), right_gripper(1)]`. Same source as `action` but in joint space. |
 | `language_task` | str | Task name. |
 | `language_prompt` | str | Task instruction. |
@@ -177,7 +178,7 @@ T_left_base→cam[i] = [T_left_base←right_base @] FK(q[i]) @ T_cam→ee
 
 ## Timestamp-based interpolation
 
-`joints` and `action` are interpolated from the ~100 Hz `robot_data.npz`
+`joints`, `action`, and `actual_poses` are interpolated from the ~100 Hz `robot_data.npz`
 onto the camera frame timestamps using `numpy.interp`. Both sources are in
 the same unit (int64 wall-clock nanoseconds), so no clock-domain conversion
 is needed. A single reference camera timestamp grid is used for all cameras
@@ -216,8 +217,9 @@ extrinsics = ld["extrinsics"]   # dict[str → (4, 4)]
 #      extrinsics["left_wrist_camera"]   → (4, 4)  cam2world at this frame
 
 # Joints and action for this frame
-joints = ld["joints"]   # (14,): [l_arm(6), l_grip(1), r_arm(6), r_grip(1)]
-action = ld["action"]   # (26,): [l_pos(3), l_rot9(9), l_grip(1), r_pos(3), r_rot9(9), r_grip(1)]
+joints       = ld["joints"]        # (14,): [l_arm(6), l_grip(1), r_arm(6), r_grip(1)] — actual
+action       = ld["action"]        # (26,): [l_pos(3), l_rot9(9), l_grip(1), r_pos(3), r_rot9(9), r_grip(1)] — FK(commanded)
+actual_poses = ld["actual_poses"]  # (26,): same layout — FK(actual)
 
 # Language
 task   = ld["language_task"]

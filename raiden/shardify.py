@@ -90,16 +90,17 @@ class ShardifyConfig:
 def _rot9_to_rot6d(rot9: np.ndarray) -> np.ndarray:
     """Convert a row-major flattened 3×3 rotation matrix to the 6D representation.
 
-    Uses the first two columns of R: [R[:,0], R[:,1]] → (6,).
+    Uses the first two rows of R: [R[0,:], R[1,:]] = [R00,R01,R02, R10,R11,R12] → (6,).
+    Matches vla_foundry's ``matrix_to_rot_6d``: ``R[:2, :].flatten()``.
 
     Args:
-        rot9: (..., 9) float array.
+        rot9: (..., 9) float array — row-major flattened 3×3.
 
     Returns:
         (..., 6) float array.
     """
     mat = rot9.reshape(rot9.shape[:-1] + (3, 3))  # (..., 3, 3)
-    return mat[..., :2].reshape(rot9.shape[:-1] + (6,))  # first 2 columns
+    return mat[..., :2, :].reshape(rot9.shape[:-1] + (6,))  # first 2 rows
 
 
 # ---------------------------------------------------------------------------
@@ -296,6 +297,23 @@ def _build_window_arrays(
                 action_seq[:, 16:25]
             )
             out[f"robot__action__grippers__right::{R}_hand"] = action_seq[:, 25:26]
+
+    # ── actual poses: FK(actual joints) — same layout as action ─────────
+    actual_poses_seq = _collect("actual_poses", 0, 26)
+    if actual_poses_seq is not None:
+        out[f"robot__actual__poses__left::{R}__xyz"] = actual_poses_seq[:, 0:3]
+        out[f"robot__actual__poses__left::{R}__rot_6d"] = _rot9_to_rot6d(
+            actual_poses_seq[:, 3:12]
+        )
+        out[f"robot__actual__grippers__left::{R}_hand"] = actual_poses_seq[:, 12:13]
+        if actual_poses_seq.shape[1] >= 26:
+            out[f"robot__actual__poses__right::{R}__xyz"] = actual_poses_seq[:, 13:16]
+            out[f"robot__actual__poses__right::{R}__rot_6d"] = _rot9_to_rot6d(
+                actual_poses_seq[:, 16:25]
+            )
+            out[f"robot__actual__grippers__right::{R}_hand"] = actual_poses_seq[
+                :, 25:26
+            ]
 
     # ── joints: (T, 7) single-arm or (T, 14) bimanual joint positions ────
     joints_seq = _collect("joints", 0, 14)

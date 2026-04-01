@@ -29,6 +29,7 @@ dependencies = [
   "textual>=8.1.1",
   "pysondb>=1.6.1",
   "onnxscript>=0.6.2",
+  "chiral",
 ]
 
 [project.optional-dependencies]
@@ -53,6 +54,7 @@ rd = "raiden.cli:main"
 i2rt = { path = "third_party/i2rt" }
 pyzed = { path = "packages/pyzed-5.2-cp311-cp311-linux_x86_64.whl" }
 pyroki = { git = "https://github.com/chungmin99/pyroki.git" }
+chiral = { git = "ssh://git@github.com/TRI-ML/chiral" }
 
 [tool.ruff]
 exclude = ["third_party/"]
