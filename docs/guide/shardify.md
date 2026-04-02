@@ -47,7 +47,8 @@ sample is identified by a UUID and consists of four file types:
 
 | File | Description |
 |---|---|
-| `{uuid}.{cam}_t{idx}.jpg` | Camera image at time index `idx` relative to the anchor frame (`t-1`, `t0`, etc.) |
+| `{uuid}.{cam}_t{idx}.jpg` | RGB image at raw frame offset `idx` from the anchor (`t-1`, `t0`, etc.) |
+| `{uuid}.{cam}_t{idx}.depth.png` | Depth map at the same offset — 16-bit greyscale PNG, values in millimetres |
 | `{uuid}.lowdim.npz` | Windowed arrays of shape `(T, D)` per key (see below) |
 | `{uuid}.metadata.json` | Per-sample metadata (episode ID, anchor timestep, padding, …) |
 | `{uuid}.language_instructions.json` | Language annotations `{"original": [...]}` |
@@ -97,8 +98,8 @@ as the proprioceptive observation fed to the policy.
 
 | Key | Shape | Description |
 |---|---|---|
-| `intrinsics.{cam}` | `(T, 3, 3)` | Pinhole camera matrix K (tiled from anchor frame) |
-| `extrinsics.{cam}` | `(T, 4, 4)` | Camera-to-world transform in left-arm-base frame |
+| `intrinsics.{cam}` | `(N, 3, 3)` | Pinhole camera matrix K at each image timestep (`N = len(image_indices)`) |
+| `extrinsics.{cam}` | `(N, 4, 4)` | Camera-to-world transform at each image timestep, left-arm-base frame |
 | `past_mask` | `(T,)` bool | `True` for past timesteps |
 | `future_mask` | `(T,)` bool | `True` for future timesteps |
 
@@ -109,8 +110,21 @@ The window length `T = past_lowdim_steps + 1 + future_lowdim_steps`
 `past_lowdim_steps` in the window.  Frames beyond the episode boundary are
 clamped (copy-padded).
 
-The rotation 6D representation uses the first two columns of the 3×3 rotation
-matrix (columns 0 and 1 of R, giving a (6,) vector per timestep).
+**Default mode (30 Hz images, 10 Hz actions):**
+
+- Every raw frame is an anchor, so each episode produces one sample per frame
+  at native 30 Hz density.
+- `stride=3` — consecutive lowdim/action window steps are 3 raw frames apart,
+  giving a 10 Hz action/proprioception sequence.  With `future_lowdim_steps=19`
+  the action window covers `19 × 3 / 30 = 1.9` seconds.
+- `image_indices` are in **raw frame** units.  The default `[-1, 0]` fetches
+  two consecutive 30 Hz frames (1/30 s apart), independent of `stride`.
+
+Set `--stride 1` for native 30 Hz action resolution.
+
+The rotation 6D representation uses the first two rows of the 3×3 rotation
+matrix (rows 0 and 1 of R, giving a (6,) vector `[R00,R01,R02,R10,R11,R12]`
+per timestep).
 
 ### vla_foundry config fields
 
@@ -159,9 +173,10 @@ Full snapshot of the shardification parameters for reproducibility.
 
 ## Sliding window and padding
 
-Each anchor frame `t` generates one sample.  The window spans frames
-`[t - past_lowdim_steps, t + future_lowdim_steps]`, clamped to episode
-boundaries.
+Each anchor frame `t` generates one sample.  The lowdim window spans raw frames
+`[t − past_lowdim_steps × stride, t + future_lowdim_steps × stride]`,
+clamped to episode boundaries.  Image frames are fetched at
+`t + img_idx` for each index in `image_indices` (raw frame offset, no stride scaling).
 
 Samples are **filtered out** if the required padding exceeds the configured
 limits:
@@ -208,7 +223,7 @@ chain: env vars, `~/.aws/credentials`, instance profile, etc.).
 | `--filter-still-samples` | off | Skip samples where neither arm moves |
 | `--still-threshold` | `0.05` | Max EE movement (m) to consider a sample still |
 | `--fail-on-nan` | on | Raise an error if NaN values are found |
-| `--stride` | `1` | Use every N-th frame as anchor |
+| `--stride` | `3` | Lowdim/action window step spacing in raw frames (3=10 Hz, 1=30 Hz). Does not affect anchor density or image offsets. |
 | `--max-episodes` | `-1` (all) | Limit number of episodes processed |
 | `--num-workers` | `1` | Number of worker processes |
 

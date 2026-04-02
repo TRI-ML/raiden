@@ -256,8 +256,8 @@ class ShardifyCommand:
     fail_on_nan: bool = True
     """Raise an error if NaN values are found in lowdim data (default: True)"""
 
-    stride: int = 1
-    """Use every N-th frame as an anchor (default: 1)"""
+    stride: int = 3
+    """Lowdim/action window step spacing in raw frames (does not affect anchor density or image offsets). 3=10 Hz actions from 30 Hz (default: 3)"""
 
     stats_stride: int = 10
     """Only feed every N-th sample into the stats accumulators to save memory (default: 10)"""
@@ -291,7 +291,7 @@ class ServeCommand:
     tri_stereo_variant: Literal["c32", "c64"] = "c64"
     """TRI Stereo model variant: 'c64' (higher quality) or 'c32' (faster)"""
 
-    max_joint_delta: float = 0.2
+    max_joint_delta: float = 0.8
     """Maximum allowed joint delta per policy step in radians before server aborts"""
 
     action_type: Literal["joint", "ee_pose"] = "ee_pose"
@@ -299,6 +299,9 @@ class ServeCommand:
 
     no_depth: bool = False
     """Disable depth sensing on ZED cameras (faster, no NEURAL_LIGHT inference)"""
+
+    resize_images: Optional[str] = "384x384"
+    """Resize images to HxW before sending to the policy (default: '384x384'). Pass empty string to disable."""
 
     camera_config_file: str = ""
     """Path to camera.json (default: ~/.config/raiden/camera.json)"""
@@ -615,6 +618,10 @@ def main():
             )
             from raiden.server import run_server
 
+            resize: tuple | None = None
+            if command.resize_images:
+                h, w = command.resize_images.split("x")
+                resize = (int(h), int(w))
             run_server(
                 camera_config_file=command.camera_config_file,
                 calibration_file=command.calibration_file,
@@ -627,6 +634,7 @@ def main():
                 max_joint_delta=command.max_joint_delta,
                 action_type=command.action_type,
                 no_depth=command.no_depth,
+                resize_images_size=resize,
             )
 
         else:

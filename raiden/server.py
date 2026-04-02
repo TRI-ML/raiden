@@ -38,12 +38,11 @@ point in the intrinsics and the ``T_cam→ee`` rotation are corrected accordingl
 """
 
 import json
-import os
 import threading
 import time
 from collections import deque
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
 import chiral
 import cv2
@@ -100,7 +99,7 @@ _PROPRIO_HISTORY_SIZE = 64
 # abrupt policy jumps while allowing normal motion.
 _DEFAULT_MAX_JOINT_DELTA = 0.2  # radians
 
-_CONTROL_HZ = 1.0
+_CONTROL_HZ = 15.0
 
 # Lazily-loaded MuJoCo kinematics instance (shared across calls).
 _kinematics: Any = None
@@ -154,7 +153,7 @@ def _fk_to_xyz_rot6d(kin: Any, q6: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
     Returns:
         xyz: (3,) float32 position.
-        rot_6d: (6,) float32 — first two columns of the rotation matrix.
+        rot_6d: (6,) float32 — first two rows of the rotation matrix.
     """
     T = _fk_padded(kin, q6)
     xyz = T[:3, 3].astype(np.float32)
@@ -205,8 +204,10 @@ class RaidenPolicyServer(chiral.PolicyServer):
         max_joint_delta: float = _DEFAULT_MAX_JOINT_DELTA,
         action_type: str = "ee_pose",
         no_depth: bool = False,
+        resize_images_size: Optional[Tuple[int, int]] = None,
     ):
         self._no_depth = no_depth
+        self._resize = resize_images_size  # (H, W) or None
         if action_type not in ("joint", "ee_pose"):
             raise ValueError(
                 f"action_type must be 'joint' or 'ee_pose', got {action_type!r}"
@@ -336,6 +337,9 @@ class RaidenPolicyServer(chiral.PolicyServer):
         self._step_count = 0
         self._t_sum = 0.0
         self._running = True
+        # Set when an emergency stop fires; causes step() to reject new actions
+        # immediately and smooth_move_joints threads to abort mid-interpolation.
+        self._estop_active = threading.Event()
 
         for name in self._raiden_cam_cfg.list_camera_names():
             threading.Thread(
@@ -359,12 +363,12 @@ class RaidenPolicyServer(chiral.PolicyServer):
         print("\nComputing camera phase offsets...")
         self._compute_camera_offsets()
 
-        # Attach footpedal soft e-stop (optional — warns and continues if absent).
+        # Attach footpedal hard e-stop (optional — warns and continues if absent).
+        # Use a custom callback so _estop_active is set *before* emergency_stop()
+        # runs, guaranteeing that any concurrent step() call sees the flag and
+        # returns immediately instead of racing with the hold loop.
         print("Initializing footpedal...")
-        self._robot.attach_footpedal()
-
-        # Background thread: shut down when footpedal e-stop fires.
-        threading.Thread(target=self._estop_monitor, daemon=True).start()
+        self._robot.attach_footpedal(callback=self._trigger_estop)
 
         print("\nRaiden policy server ready.")
 
@@ -418,6 +422,13 @@ class RaidenPolicyServer(chiral.PolicyServer):
                     w, h = handle["w"], handle["h"]
                     K[0, 2] = (w - 1) - K[0, 2]
                     K[1, 2] = (h - 1) - K[1, 2]
+                if self._resize is not None:
+                    h_out, w_out = self._resize
+                    h_src, w_src = handle["h"], handle["w"]
+                    K[0, 0] *= w_out / w_src  # fx
+                    K[0, 2] *= w_out / w_src  # cx
+                    K[1, 1] *= h_out / h_src  # fy
+                    K[1, 2] *= h_out / h_src  # cy
                 self._cam_intrinsics[name] = K
             else:
                 # Camera failed to open — use a placeholder.
@@ -465,8 +476,11 @@ class RaidenPolicyServer(chiral.PolicyServer):
         configs = []
         for name in self._raiden_cam_cfg.list_camera_names():
             handle = self._cam_handles.get(name, {})
-            h = handle.get("h", 0)
-            w = handle.get("w", 0)
+            if self._resize is not None:
+                h, w = self._resize
+            else:
+                h = handle.get("h", 0)
+                w = handle.get("w", 0)
             is_zed = handle.get("type") == "zed"
             has_depth = not (self._no_depth and is_zed)
             configs.append(
@@ -522,6 +536,27 @@ class RaidenPolicyServer(chiral.PolicyServer):
             )
         return streams
 
+    def _trigger_estop(self) -> None:
+        """Set the server-level e-stop flag then invoke the robot emergency stop.
+
+        Called from the footpedal callback thread.  Setting _estop_active first
+        ensures that any concurrent step() call in the asyncio event loop
+        sees the flag and returns immediately rather than racing with the
+        emergency_stop() hold loop.
+        """
+        self._estop_active.set()
+        self._robot.emergency_stop()
+
+    async def _handle(self, websocket) -> None:
+        try:
+            await super()._handle(websocket)
+        finally:
+            print(
+                "[RaidenPolicyServer] Client disconnected — triggering emergency stop."
+            )
+            self._estop_active.set()
+            self._robot.emergency_stop()
+
     async def get_metadata(self) -> dict:
         action_shape = (
             [1, BIMANUAL_EE_POSE_DOF]
@@ -549,6 +584,9 @@ class RaidenPolicyServer(chiral.PolicyServer):
     async def step(
         self, action: np.ndarray
     ) -> tuple[Observation, float, bool, bool, dict]:
+        if self._estop_active.is_set():
+            raise RuntimeError("Emergency stop active — rejecting policy step.")
+
         t0 = time.perf_counter()
 
         # Accept (D,), (1, D), or (N, D).
@@ -559,20 +597,20 @@ class RaidenPolicyServer(chiral.PolicyServer):
 
         for i, step_action in enumerate(action):
             step_action = step_action.reshape(-1)
-            print("step_action", step_action)
+            print("step_action", step_action[-1:])
 
             if self._action_type == "ee_pose":
                 joint_cmd = self._ee_pose_to_joint_cmd(step_action)
             else:
                 joint_cmd = step_action
 
-            print("joint_cmd", joint_cmd)
+            print("joint_cmd", joint_cmd[-1:])
             # Safety check: abort if any joint delta exceeds the threshold.
             self._check_joint_delta(joint_cmd)
 
             # Smoothly interpolate to the target over one control period.
             # _smooth_command blocks for 1/_CONTROL_HZ seconds, so no extra sleep needed.
-            # self._smooth_command(joint_cmd)
+            self._smooth_command(joint_cmd)
 
         # Use the final joint_cmd for the safety check reference already done above.
         # Reuse joint_cmd from the last iteration.
@@ -755,7 +793,11 @@ class RaidenPolicyServer(chiral.PolicyServer):
             t = threading.Thread(
                 target=smooth_move_joints,
                 args=(self._robot.follower_l, joint_cmd[:DOF]),
-                kwargs={"time_interval_s": 1.0 / _CONTROL_HZ, "steps": 200},
+                kwargs={
+                    "time_interval_s": 1.0 / _CONTROL_HZ,
+                    "steps": 200,
+                    "stop_event": self._estop_active,
+                },
                 daemon=True,
             )
             threads.append(t)
@@ -763,7 +805,11 @@ class RaidenPolicyServer(chiral.PolicyServer):
             t = threading.Thread(
                 target=smooth_move_joints,
                 args=(self._robot.follower_r, joint_cmd[DOF : DOF * 2]),
-                kwargs={"time_interval_s": 1.0 / _CONTROL_HZ, "steps": 200},
+                kwargs={
+                    "time_interval_s": 1.0 / _CONTROL_HZ,
+                    "steps": 200,
+                    "stop_event": self._estop_active,
+                },
                 daemon=True,
             )
             threads.append(t)
@@ -798,8 +844,10 @@ class RaidenPolicyServer(chiral.PolicyServer):
                 pairs.append(("right", q_r, action[DOF : DOF * 2]))
 
         for arm, current, commanded in pairs:
-            delta = np.abs(commanded - current)
-            print("delta", arm, commanded, current)
+            # Only check the 6 arm joints — gripper (index 6) uses linear position
+            # units (not radians) and has a wide operating range; applying the
+            # radian-based limit to it would falsely trigger on any large gripper step.
+            delta = np.abs(commanded[:6] - current[:6])
             max_delta = float(delta.max())
             if max_delta > self._max_joint_delta:
                 joint_idx = int(delta.argmax())
@@ -807,10 +855,10 @@ class RaidenPolicyServer(chiral.PolicyServer):
                     f"\n[SAFETY] Dangerously large joint delta on {arm} arm — "
                     f"joint {joint_idx}: {max_delta:.4f} rad "
                     f"(limit={self._max_joint_delta:.4f} rad). "
-                    "Stopping policy server."
+                    "Triggering emergency stop."
                 )
-                self.close()
-                os._exit(1)
+                self._estop_active.set()
+                self._robot.emergency_stop()
 
     # -------------------------------------------------------------------------
     # Observation construction (overrides base class to add dynamic extrinsics)
@@ -1084,13 +1132,23 @@ class RaidenPolicyServer(chiral.PolicyServer):
                     if flip:
                         color_bgr = cv2.rotate(color_bgr, cv2.ROTATE_180)
                         depth = cv2.rotate(depth, cv2.ROTATE_180)
+                    if self._resize is not None:
+                        h_out, w_out = self._resize
+                        depth = cv2.resize(
+                            depth, (w_out, h_out), interpolation=cv2.INTER_LANCZOS4
+                        )
                     if name in self.depths:
                         self.update_depth(name, depth)
                 else:
                     if flip:
                         color_bgr = cv2.rotate(color_bgr, cv2.ROTATE_180)
 
-                # Serve RGB to the policy.
+                # Resize and serve RGB to the policy.
+                if self._resize is not None:
+                    h_out, w_out = self._resize
+                    color_bgr = cv2.resize(
+                        color_bgr, (w_out, h_out), interpolation=cv2.INTER_LANCZOS4
+                    )
                 self.update_image(name, color_bgr[..., ::-1].copy())
                 with self._cam_ts_locks[name]:
                     self._cam_arrival_ts_ns[name] = time.monotonic_ns()
@@ -1114,6 +1172,14 @@ class RaidenPolicyServer(chiral.PolicyServer):
                 if flip:
                     color_bgr = cv2.rotate(color_bgr, cv2.ROTATE_180)
                     depth = cv2.rotate(depth, cv2.ROTATE_180)
+                if self._resize is not None:
+                    h_out, w_out = self._resize
+                    color_bgr = cv2.resize(
+                        color_bgr, (w_out, h_out), interpolation=cv2.INTER_LANCZOS4
+                    )
+                    depth = cv2.resize(
+                        depth, (w_out, h_out), interpolation=cv2.INTER_LANCZOS4
+                    )
                 # Serve RGB to the policy.
                 self.update_image(name, color_bgr[..., ::-1].copy())
                 if name in self.depths:
@@ -1152,6 +1218,11 @@ class RaidenPolicyServer(chiral.PolicyServer):
                 fx, baseline = self._stereo_calib.get(name, (0.0, 0.0))
                 try:
                     depth = self._ffs_predictor.predict(left, right, fx, baseline)
+                    if self._resize is not None:
+                        h_out, w_out = self._resize
+                        depth = cv2.resize(
+                            depth, (w_out, h_out), interpolation=cv2.INTER_LANCZOS4
+                        )
                     if name in self.depths:
                         self.update_depth(name, depth)
                     with handle["stereo_lock"]:
@@ -1200,24 +1271,6 @@ class RaidenPolicyServer(chiral.PolicyServer):
             time.sleep(1 / 100)
 
     # -------------------------------------------------------------------------
-    # E-stop monitor
-    # -------------------------------------------------------------------------
-
-    def _estop_monitor(self) -> None:
-        """Background thread: shut down the policy server when the footpedal fires.
-
-        The footpedal soft_pause() holds all arms for 5 s then sets
-        session_estop_requested.  This thread detects that flag and calls
-        close() + os._exit(0) so the asyncio event loop is also terminated.
-        """
-        while self._running:
-            if self._robot.session_estop_requested:
-                print("\n[FootPedal] E-stop triggered — shutting down policy server.")
-                self.close()
-                os._exit(0)
-            time.sleep(0.1)
-
-    # -------------------------------------------------------------------------
     # Cleanup
     # -------------------------------------------------------------------------
 
@@ -1253,6 +1306,7 @@ def run_server(
     max_joint_delta: float = _DEFAULT_MAX_JOINT_DELTA,
     action_type: str = "ee_pose",
     no_depth: bool = False,
+    resize_images_size: Optional[Tuple[int, int]] = (384, 384),
 ) -> None:
     """Start the Raiden chiral policy server."""
     from raiden._config import CALIBRATION_FILE, CAMERA_CONFIG
@@ -1269,6 +1323,7 @@ def run_server(
         max_joint_delta=max_joint_delta,
         action_type=action_type,
         no_depth=no_depth,
+        resize_images_size=resize_images_size,
     )
     try:
         server.run()

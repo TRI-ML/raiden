@@ -27,7 +27,9 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import cv2
 import numpy as np
+from PIL import Image
 
 
 # ---------------------------------------------------------------------------
@@ -45,7 +47,15 @@ class ShardifyConfig:
     # Window parameters
     past_lowdim_steps: int = 1
     future_lowdim_steps: int = 19
-    #: Image time indices relative to the anchor frame (negative = past).
+    #: Step spacing (in raw frames) between consecutive timesteps in the lowdim
+    #: action/proprio window.  Does NOT affect anchor frame sampling (every raw
+    #: frame is an anchor → 30 Hz sample density) or image offsets.
+    #: Default 3 = 10 Hz action window from 30 Hz recordings.
+    #: Set to 1 for native 30 Hz action resolution.
+    stride: int = 3
+    #: Image time indices in raw frame units relative to the anchor frame
+    #: (negative = past).  [-1, 0] fetches the previous raw frame and the
+    #: anchor itself — two consecutive 30 Hz frames (1/30 s apart).
     image_indices: List[int] = dataclasses.field(default_factory=lambda: [-1, 0])
     max_padding_left: int = 3
     max_padding_right: int = 15
@@ -67,8 +77,6 @@ class ShardifyConfig:
     still_threshold: float = 0.05
     fail_on_nan: bool = True
 
-    # Episode / frame selection
-    stride: int = 1
     max_episodes_to_process: int = -1
 
     # Output
@@ -85,6 +93,34 @@ class ShardifyConfig:
 # ---------------------------------------------------------------------------
 # Rotation helpers
 # ---------------------------------------------------------------------------
+
+
+def _rot6d_to_mat(v: np.ndarray) -> np.ndarray:
+    """Convert a (6,) rot6d vector to a (3, 3) rotation matrix via Gram-Schmidt.
+
+    Inverse of ``_rot9_to_rot6d``: reconstructs the full rotation matrix from
+    its first two rows.
+
+    Args:
+        v: (6,) float array — [R[0,:], R[1,:]].
+
+    Returns:
+        (3, 3) float64 rotation matrix.
+    """
+    a1, a2 = v[:3].astype(np.float64), v[3:6].astype(np.float64)
+    b1 = a1 / np.linalg.norm(a1)
+    b2 = a2 - np.dot(b1, a2) * b1
+    b2 = b2 / np.linalg.norm(b2)
+    b3 = np.cross(b1, b2)
+    return np.stack([b1, b2, b3], axis=0)
+
+
+def _build_transform(xyz: np.ndarray, rot6d: np.ndarray) -> np.ndarray:
+    """Build a 4×4 rigid-body transform from a (3,) position and (6,) rot6d."""
+    T = np.eye(4, dtype=np.float64)
+    T[:3, :3] = _rot6d_to_mat(rot6d)
+    T[:3, 3] = xyz.astype(np.float64)
+    return T
 
 
 def _rot9_to_rot6d(rot9: np.ndarray) -> np.ndarray:
@@ -235,13 +271,25 @@ def _load_rgb_jpeg(
     if resize is None:
         return path.read_bytes()
     # Resize and re-encode
-    from PIL import Image  # noqa: PLC0415
-
     img = Image.open(path)
     img = img.resize((resize[1], resize[0]), Image.LANCZOS)  # resize is (H, W)
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=jpeg_quality)
     return buf.getvalue()
+
+
+def _load_depth_png(ep_dir: Path, camera_name: str, frame_idx: int) -> Optional[bytes]:
+    """Return 16-bit PNG bytes for a depth frame, or None if absent.
+
+    Loads the uint16 mm depth stored by the converter as a ``.npz`` and
+    re-encodes it as a 16-bit greyscale PNG (lossless, widely supported).
+    """
+    path = ep_dir / "depth" / camera_name / f"{frame_idx:010d}.npz"
+    if not path.exists():
+        return None
+    depth_mm = np.load(path)["depth"]  # uint16, millimetres
+    _, buf = cv2.imencode(".png", depth_mm)
+    return bytes(buf)
 
 
 # ---------------------------------------------------------------------------
@@ -267,8 +315,9 @@ def _build_window_arrays(
     n = len(frames)
     R = _ROBOT
 
+    s = config.stride
     window_idx = [
-        _clamp_frame(anchor_idx + offset, n)
+        _clamp_frame(anchor_idx + offset * s, n)
         for offset in range(-config.past_lowdim_steps, config.future_lowdim_steps + 1)
     ]
 
@@ -330,21 +379,75 @@ def _build_window_arrays(
             out[f"robot__desired__joint_position__right::{R}"] = act_joints_seq[:, 7:14]
 
     # ── intrinsics / extrinsics ───────────────────────────────────────────
+    # Stored at the image timesteps (raw frame offsets, 30 Hz) so they align
+    # with the RGB and depth images.  Shape: (len(image_indices), 3, 3) and
+    # (len(image_indices), 4, 4) respectively.
     anchor_frame = frames[anchor_idx]
+    img_frame_indices = [
+        _clamp_frame(anchor_idx + i, n) for i in config.image_indices
+    ]
     for cam_name in output_cam_names:
         src_cam = _reverse_map(config.camera_name_map, cam_name)
         K = anchor_frame.get("intrinsics", {}).get(src_cam)
         if K is not None:
             K_arr = np.asarray(K, dtype=np.float32)
-            out[f"intrinsics.{cam_name}"] = np.tile(K_arr[None], (T, 1, 1))
+            out[f"intrinsics.{cam_name}"] = np.tile(
+                K_arr[None], (len(img_frame_indices), 1, 1)
+            )
 
         ext_rows = []
-        for fi in window_idx:
+        for fi in img_frame_indices:
             ext = frames[fi].get("extrinsics", {}).get(src_cam)
             if ext is None:
                 ext = np.eye(4, dtype=np.float32)
             ext_rows.append(np.asarray(ext, dtype=np.float64))
         out[f"extrinsics.{cam_name}"] = np.stack(ext_rows)
+
+    # ── relative poses (relative to anchor actual pose) ───────────────────
+    # For each arm side that has actual pose data, compute xyz/rot6d/gripper
+    # offsets relative to the anchor frame's actual pose.  Both action and
+    # actual pose sequences get a relative variant.  The reference is always
+    # the anchor actual pose so the policy sees displacements from "where the
+    # robot is now".
+    anchor_i = config.past_lowdim_steps
+    for side in ("left", "right"):
+        anc_xyz_key = f"robot__actual__poses__{side}::{R}__xyz"
+        anc_rot_key = f"robot__actual__poses__{side}::{R}__rot_6d"
+        if anc_xyz_key not in out:
+            continue  # arm not present (single-arm episode)
+
+        anc_xyz = out[anc_xyz_key][anchor_i]        # (3,)
+        anc_rot6d = out[anc_rot_key][anchor_i]      # (6,)
+        T_anc_inv = np.linalg.inv(_build_transform(anc_xyz, anc_rot6d))  # (4, 4)
+
+        for src in ("action", "actual"):
+            if src == "action":
+                xyz_key = f"robot__action__poses__{side}::{R}__xyz"
+                rot_key = f"robot__action__poses__{side}::{R}__rot_6d"
+                out_xyz = f"robot__action__poses__{side}::{R}__xyz_relative"
+                out_rot = f"robot__action__poses__{side}::{R}__rot_6d_relative"
+            else:
+                xyz_key = f"robot__actual__poses__{side}::{R}__xyz"
+                rot_key = f"robot__actual__poses__{side}::{R}__rot_6d"
+                out_xyz = f"robot__actual__poses__{side}::{R}__xyz_relative"
+                out_rot = f"robot__actual__poses__{side}::{R}__rot_6d_relative"
+
+            if xyz_key not in out:
+                continue
+
+            xyz_seq   = out[xyz_key]   # (T, 3)
+            rot6d_seq = out[rot_key]   # (T, 6)
+
+            rel_xyz   = np.empty_like(xyz_seq)
+            rel_rot6d = np.empty_like(rot6d_seq)
+            for i in range(xyz_seq.shape[0]):
+                T_t = _build_transform(xyz_seq[i], rot6d_seq[i])
+                T_rel = T_anc_inv @ T_t
+                rel_xyz[i]   = T_rel[:3, 3].astype(np.float32)
+                rel_rot6d[i] = T_rel[:2, :3].flatten().astype(np.float32)
+
+            out[out_xyz] = rel_xyz
+            out[out_rot] = rel_rot6d
 
     # ── masks ─────────────────────────────────────────────────────────────
     past_mask = np.zeros(T, dtype=bool)
@@ -724,11 +827,18 @@ def run_shardify(
         control = _ep_meta.get("control", "leader")
         ep_samples = 0
 
-        anchor_indices = list(range(0, n_frames, config.stride))
+        # Every raw frame is an anchor → 30 Hz sample density.
+        # The lowdim/action window uses config.stride for step spacing (10 Hz
+        # with the default stride=3).
+        anchor_indices = list(range(0, n_frames))
         random.shuffle(anchor_indices)
         for t in anchor_indices:
-            left_pad = max(0, config.past_lowdim_steps - t)
-            right_pad = max(0, config.future_lowdim_steps - (n_frames - 1 - t))
+            s = config.stride
+            # Count padding in lowdim-step units (ceiling division).
+            left_frames_needed = config.past_lowdim_steps * s
+            right_frames_needed = config.future_lowdim_steps * s
+            left_pad = max(0, -(-max(0, left_frames_needed - t) // s))
+            right_pad = max(0, -(-max(0, right_frames_needed - (n_frames - 1 - t)) // s))
 
             if (
                 left_pad > config.max_padding_left
@@ -785,18 +895,24 @@ def run_shardify(
             sample_uuid = str(uuid.uuid4())
 
             for img_idx in config.image_indices:
+                # image_indices are in raw frame units (not stride-scaled).
                 abs_frame = _clamp_frame(t + img_idx, n_frames)
-                suffix = f"t{img_idx}" if img_idx < 0 else f"t{img_idx}"
+                suffix = f"t{img_idx}"
                 for src_cam, out_cam in zip(src_cam_names, output_cam_names):
-                    raw = _load_rgb_jpeg(
+                    rgb = _load_rgb_jpeg(
                         ep_dir,
                         src_cam,
                         abs_frame,
                         config.resize_images_size,
                         config.jpeg_quality,
                     )
-                    if raw is not None:
-                        sample_files[f"{sample_uuid}.{out_cam}_{suffix}.jpg"] = raw
+                    if rgb is not None:
+                        sample_files[f"{sample_uuid}.{out_cam}_{suffix}.jpg"] = rgb
+                    depth = _load_depth_png(ep_dir, src_cam, abs_frame)
+                    if depth is not None:
+                        sample_files[
+                            f"{sample_uuid}.{out_cam}_{suffix}.depth.png"
+                        ] = depth
 
             # ── serialize lowdim ─────────────────────────────────────────
             buf = io.BytesIO()

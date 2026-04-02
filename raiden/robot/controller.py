@@ -1244,25 +1244,48 @@ class RobotController:
         for t in threads:
             t.join()
 
-    def attach_footpedal(self, device_path: Optional[str] = None) -> None:
+    def attach_footpedal(
+        self,
+        device_path: Optional[str] = None,
+        direct_estop: bool = False,
+        callback: Optional[callable] = None,
+    ) -> None:
         """Attach a footpedal for soft e-stop.  Optional — warns and continues if absent.
 
-        Only the LEFT pedal triggers soft_pause().  The middle and right pedals
-        are reserved for success/failure verdict marking in recorder.py and must
-        not trigger a robot e-stop.
+        Only the LEFT pedal triggers the e-stop action.  The middle and right
+        pedals are reserved for success/failure verdict marking in recorder.py
+        and must not trigger a robot e-stop.
 
         Args:
             device_path: explicit /dev/input/eventN.  Auto-detected if None.
+            direct_estop: if True, pressing the left pedal calls
+                ``emergency_stop()`` immediately (skips the 5-second
+                ``soft_pause`` timer).  Use this in contexts that have no
+                teleoperation loop (e.g. the policy server).
+            callback: if provided, called (with no arguments) when the left
+                pedal is pressed, overriding both ``direct_estop`` and
+                ``soft_pause`` behaviour.  Use this to inject pre-estop
+                bookkeeping (e.g. setting a server-level flag) before the
+                robot stop sequence runs.
         """
         from raiden.robot.footpedal import PEDAL_LEFT
 
         self._footpedal = try_open_footpedal(device_path)
         if self._footpedal is not None:
-            self._footpedal.on_press(
-                lambda code: (
-                    self.soft_pause(duration=5.0) if code == PEDAL_LEFT else None
+            if callback is not None:
+                self._footpedal.on_press(
+                    lambda code: callback() if code == PEDAL_LEFT else None
                 )
-            )
+            elif direct_estop:
+                self._footpedal.on_press(
+                    lambda code: self.emergency_stop() if code == PEDAL_LEFT else None
+                )
+            else:
+                self._footpedal.on_press(
+                    lambda code: (
+                        self.soft_pause(duration=5.0) if code == PEDAL_LEFT else None
+                    )
+                )
             self._footpedal.start()
 
     def setup_for_teleop_recording(self):
@@ -1386,6 +1409,11 @@ class RobotController:
         print("\n  Step 4: Moving all arms to home positions simultaneously...")
         self.disable_gravity_compensation()
         self.move_to_home_positions(simultaneous=True)
+
+        # Detach footpedal before close() so that if emergency_stop() was
+        # invoked from the footpedal callback thread, close() does not try to
+        # join that same thread (which raises "cannot join current thread").
+        self._footpedal = None
         self.close()
 
         print("\n  All arms reached home position.")

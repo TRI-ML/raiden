@@ -74,8 +74,9 @@ server prints an error and calls `os._exit(1)` before sending the command.
 rd serve --max-joint-delta 0.1
 ```
 
-A footpedal soft e-stop is attached automatically if present.  Pressing the
-pedal holds all arms for 5 s and then shuts down the server.
+A footpedal e-stop is attached automatically if present.  Pressing the left
+pedal immediately triggers an emergency stop: arms are held at their current
+positions for 5 s, then moved to home, and the server exits.
 
 ## Options
 
@@ -90,6 +91,7 @@ pedal holds all arms for 5 s and then shuts down the server.
 | `--tri-stereo-variant` | `c64` | TRI Stereo variant: `c64` or `c32` |
 | `--max-joint-delta` | `0.2` | Safety limit in radians per step |
 | `--no-depth` | `false` | Disable ZED depth sensing (skips NEURAL_LIGHT inference for faster startup and lower GPU load) |
+| `--resize-images` | `384x384` | Resize images to `HxW` before sending to the policy. Pass empty string to disable. |
 | `--camera-config-file` | `~/.config/raiden/camera.json` | Path to camera config |
 | `--calibration-file` | `~/.config/raiden/calibration_results.json` | Path to calibration file |
 
