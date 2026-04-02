@@ -295,7 +295,10 @@ class ServeCommand:
     """Maximum allowed joint delta per policy step in radians before server aborts"""
 
     action_type: Literal["joint", "ee_pose"] = "ee_pose"
-    """Action space: 'joint' (14-D joint positions, right then left) or 'ee_pose' (20-D EE poses, left then right, IK solved on-the-fly)"""
+    """Action space: 'joint' (14-D joint positions, left then right) or 'ee_pose' (20-D EE poses, IK solved on-the-fly)"""
+
+    no_depth: bool = False
+    """Disable depth sensing on ZED cameras (faster, no NEURAL_LIGHT inference)"""
 
     camera_config_file: str = ""
     """Path to camera.json (default: ~/.config/raiden/camera.json)"""
@@ -623,6 +626,7 @@ def main():
                 tri_stereo_variant=command.tri_stereo_variant,
                 max_joint_delta=command.max_joint_delta,
                 action_type=command.action_type,
+                no_depth=command.no_depth,
             )
 
         else:

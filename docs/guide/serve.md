@@ -39,7 +39,7 @@ rd serve --action-type joint
 | `--action-type` | Action dims | Layout |
 |---|---|---|
 | `ee_pose` (default) | 20 | `l_xyz(3) + r_xyz(3) + l_rot6d(6) + r_rot6d(6) + l_grip(1) + r_grip(1)` |
-| `joint` | 14 | `r_joints(7) + l_joints(7)` |
+| `joint` | 14 | `l_joints(7) + r_joints(7)` |
 
 ## Depth backends
 
@@ -89,6 +89,7 @@ pedal holds all arms for 5 s and then shuts down the server.
 | `--ffs-iters` | `8` | FFS update iterations |
 | `--tri-stereo-variant` | `c64` | TRI Stereo variant: `c64` or `c32` |
 | `--max-joint-delta` | `0.2` | Safety limit in radians per step |
+| `--no-depth` | `false` | Disable ZED depth sensing (skips NEURAL_LIGHT inference for faster startup and lower GPU load) |
 | `--camera-config-file` | `~/.config/raiden/camera.json` | Path to camera config |
 | `--calibration-file` | `~/.config/raiden/calibration_results.json` | Path to calibration file |
 

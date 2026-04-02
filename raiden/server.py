@@ -204,7 +204,9 @@ class RaidenPolicyServer(chiral.PolicyServer):
         tri_stereo_variant: str = "c64",
         max_joint_delta: float = _DEFAULT_MAX_JOINT_DELTA,
         action_type: str = "ee_pose",
+        no_depth: bool = False,
     ):
+        self._no_depth = no_depth
         if action_type not in ("joint", "ee_pose"):
             raise ValueError(
                 f"action_type must be 'joint' or 'ee_pose', got {action_type!r}"
@@ -465,13 +467,15 @@ class RaidenPolicyServer(chiral.PolicyServer):
             handle = self._cam_handles.get(name, {})
             h = handle.get("h", 0)
             w = handle.get("w", 0)
+            is_zed = handle.get("type") == "zed"
+            has_depth = not (self._no_depth and is_zed)
             configs.append(
                 chiral.CameraConfig(
                     name=name,
                     height=h,
                     width=w,
                     channels=3,
-                    has_depth=True,
+                    has_depth=has_depth,
                     intrinsics=self._cam_intrinsics[name],
                     extrinsics=self._cam_extrinsics[name],
                 )
@@ -555,19 +559,20 @@ class RaidenPolicyServer(chiral.PolicyServer):
 
         for i, step_action in enumerate(action):
             step_action = step_action.reshape(-1)
+            print("step_action", step_action)
 
             if self._action_type == "ee_pose":
                 joint_cmd = self._ee_pose_to_joint_cmd(step_action)
             else:
                 joint_cmd = step_action
 
+            print("joint_cmd", joint_cmd)
             # Safety check: abort if any joint delta exceeds the threshold.
             self._check_joint_delta(joint_cmd)
 
             # Smoothly interpolate to the target over one control period.
             # _smooth_command blocks for 1/_CONTROL_HZ seconds, so no extra sleep needed.
-            print("joint_cmd", i, joint_cmd)
-            self._smooth_command(joint_cmd)
+            # self._smooth_command(joint_cmd)
 
         # Use the final joint_cmd for the safety check reference already done above.
         # Reuse joint_cmd from the last iteration.
@@ -692,11 +697,10 @@ class RaidenPolicyServer(chiral.PolicyServer):
         in ``lowdim.npz``.
 
         Returns:
-            (14,) float32 joint command — right arm first, then left arm,
+            (14,) float32 joint command — left arm first, then right arm,
             matching the joint action convention expected by ``step()``.
         """
         kin = _get_kinematics()
-        print("action", action)
 
         # action layout: [l_xyz(3), r_xyz(3), l_rot6d(6), r_rot6d(6), l_grip(1), r_grip(1)]
         T_l = _pose_from_xyz_rot6d(action[0:3], action[6:12])
@@ -730,8 +734,8 @@ class RaidenPolicyServer(chiral.PolicyServer):
             cmd_r = np.zeros(DOF, dtype=np.float32)
 
         # IK returns full nq — take arm joints only, then append gripper.
-        # Output layout: right arm first, then left arm (matches joint action convention).
-        return np.concatenate([cmd_r, cmd_l])
+        # Output layout: left arm first, then right arm (matches joint action convention).
+        return np.concatenate([cmd_l, cmd_r])
 
     # -------------------------------------------------------------------------
     # Smooth joint command
@@ -743,22 +747,22 @@ class RaidenPolicyServer(chiral.PolicyServer):
         Both arms are interpolated in parallel threads so neither blocks the other.
 
         Args:
-            joint_cmd: (14,) float32 — right arm (7) then left arm (7),
+            joint_cmd: (14,) float32 — left arm (7) then right arm (7),
                 where each 7-D slice is [arm_joints(6), gripper(1)].
         """
         threads = []
-        if self._robot.follower_r:
+        if self._robot.follower_l:
             t = threading.Thread(
                 target=smooth_move_joints,
-                args=(self._robot.follower_r, joint_cmd[:DOF]),
+                args=(self._robot.follower_l, joint_cmd[:DOF]),
                 kwargs={"time_interval_s": 1.0 / _CONTROL_HZ, "steps": 200},
                 daemon=True,
             )
             threads.append(t)
-        if self._robot.follower_l:
+        if self._robot.follower_r:
             t = threading.Thread(
                 target=smooth_move_joints,
-                args=(self._robot.follower_l, joint_cmd[DOF : DOF * 2]),
+                args=(self._robot.follower_r, joint_cmd[DOF : DOF * 2]),
                 kwargs={"time_interval_s": 1.0 / _CONTROL_HZ, "steps": 200},
                 daemon=True,
             )
@@ -781,21 +785,21 @@ class RaidenPolicyServer(chiral.PolicyServer):
         never sent to the robot.
 
         Args:
-            action: Flat array of length ≥ ``BIMANUAL_DOF`` (right arm then left arm).
+            action: Flat array of length ≥ ``BIMANUAL_DOF`` (left arm then right arm).
         """
         pairs = []
-        if self._robot.follower_r:
-            q_r = self._read_proprio("follower_r_joint_pos")
-            if q_r is not None:
-                pairs.append(("right", q_r, action[:DOF]))
         if self._robot.follower_l:
             q_l = self._read_proprio("follower_l_joint_pos")
             if q_l is not None:
-                pairs.append(("left", q_l, action[DOF : DOF * 2]))
+                pairs.append(("left", q_l, action[:DOF]))
+        if self._robot.follower_r:
+            q_r = self._read_proprio("follower_r_joint_pos")
+            if q_r is not None:
+                pairs.append(("right", q_r, action[DOF : DOF * 2]))
 
         for arm, current, commanded in pairs:
             delta = np.abs(commanded - current)
-            print("delta", commanded, current)
+            print("delta", arm, commanded, current)
             max_delta = float(delta.max())
             if max_delta > self._max_joint_delta:
                 joint_idx = int(delta.argmax())
@@ -966,7 +970,7 @@ class RaidenPolicyServer(chiral.PolicyServer):
         params.camera_fps = 30
         params.depth_mode = (
             sl.DEPTH_MODE.NONE
-            if self._stereo_method in ("ffs", "tri_stereo")
+            if self._no_depth or self._stereo_method in ("ffs", "tri_stereo")
             else sl.DEPTH_MODE.NEURAL_LIGHT
         )
         params.coordinate_units = sl.UNIT.METER
@@ -1073,7 +1077,7 @@ class RaidenPolicyServer(chiral.PolicyServer):
                         handle["latest_left"] = color_bgr
                         handle["latest_right"] = right_bgr
                         handle["stereo_seq"] += 1
-                else:
+                elif not self._no_depth:
                     cam.retrieve_measure(depth_mat, sl.MEASURE.DEPTH)
                     raw = depth_mat.get_data().copy()
                     depth = np.where(np.isfinite(raw), raw, 0.0).astype(np.float32)
@@ -1082,6 +1086,9 @@ class RaidenPolicyServer(chiral.PolicyServer):
                         depth = cv2.rotate(depth, cv2.ROTATE_180)
                     if name in self.depths:
                         self.update_depth(name, depth)
+                else:
+                    if flip:
+                        color_bgr = cv2.rotate(color_bgr, cv2.ROTATE_180)
 
                 # Serve RGB to the policy.
                 self.update_image(name, color_bgr[..., ::-1].copy())
@@ -1245,6 +1252,7 @@ def run_server(
     tri_stereo_variant: str = "c64",
     max_joint_delta: float = _DEFAULT_MAX_JOINT_DELTA,
     action_type: str = "ee_pose",
+    no_depth: bool = False,
 ) -> None:
     """Start the Raiden chiral policy server."""
     from raiden._config import CALIBRATION_FILE, CAMERA_CONFIG
@@ -1260,6 +1268,7 @@ def run_server(
         tri_stereo_variant=tri_stereo_variant,
         max_joint_delta=max_joint_delta,
         action_type=action_type,
+        no_depth=no_depth,
     )
     try:
         server.run()

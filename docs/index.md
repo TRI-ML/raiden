@@ -87,7 +87,7 @@ The following features are coming soon:
 - **Fin-ray gripper support** — support for fin-ray compliant grippers, which conform to object shapes for robust and gentle grasping.
 - **Policy training and inference** — built-in integration for policy training pipelines and closed-loop inference.
 - **LeRobot format converter** — export converted episodes to the [LeRobot](https://github.com/huggingface/lerobot) dataset format for compatibility with the Hugging Face ecosystem.
-- **Initial condition management** — set up and save named initial conditions (robot pose + object placement) in the console to enable reproducible, side-by-side comparison of multiple policies under identical starting states.
+- **Initial scene condition management** — set up and save named initial scene conditions in the console to enable reproducible, side-by-side comparison of multiple policies under identical starting states.
 
 ## Acknowledgments
 

@@ -9,7 +9,7 @@
 5. **[Record demonstrations](recording.md)** - capture teleoperation episodes with synchronized cameras and robot joint data.
 6. **[Convert to dataset](conversion.md)** - extract frames, synchronize multi-camera streams, and interpolate joint poses into a structured dataset.
 7. **[Shardify](shardify.md)** - export converted episodes to WebDataset sharded `.tar` files for policy training.
-8. **[Serve](serve.md)** - run the live policy inference server (chiral protocol).
+8. **[Evaluation](serve.md)** - run the live policy inference server (chiral protocol).
 9. **[Replay](replay.md)** - replay recorded follower arm motion on the physical hardware to verify a recording.
 10. **[Visualize](visualization.md)** - inspect converted recordings interactively in Rerun.
 

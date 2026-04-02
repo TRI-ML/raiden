@@ -60,7 +60,7 @@ nav:
     - "6. Recording": guide/recording.md
     - "7. Conversion": guide/conversion.md
     - "8. Shardify": guide/shardify.md
-    - "9. Serve": guide/serve.md
+    - "9. Evaluation": guide/serve.md
     - "10. Replay": guide/replay.md
     - "11. Visualization": guide/visualization.md
     - Safety: guide/safety.md
