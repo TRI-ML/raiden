@@ -27,6 +27,7 @@ PNG frames and depth maps.
 """
 
 import json
+import re
 import select
 import shutil
 import signal
@@ -423,6 +424,22 @@ def load_cameras_from_config(
 # ---------------------------------------------------------------------------
 
 
+_TASK_NAME_RE = re.compile(r"^[A-Za-z0-9_]+$")
+
+
+def validate_task_name(name: str) -> str | None:
+    """Return an error message if *name* is invalid, otherwise None.
+
+    Valid names contain only letters, digits, and underscores — no spaces.
+    Examples: ``PickUpApple``, ``pick_up_apple``, ``task01``.
+    """
+    if not name:
+        return "Task name cannot be empty."
+    if not _TASK_NAME_RE.match(name):
+        return "Task name must contain only letters, digits, and underscores (no spaces). E.g. PickUpApple or pick_up_apple."
+    return None
+
+
 def select_task() -> tuple[str, str]:
     """Use fzf to choose (or create) a task for recording."""
     db = get_db()
@@ -434,8 +451,9 @@ def select_task() -> tuple[str, str]:
 
     if chosen == _NEW:
         name = input("  New task name: ").strip()
-        if not name:
-            print("Error: task name cannot be empty")
+        err = validate_task_name(name)
+        if err:
+            print(f"Error: {err}")
             sys.exit(1)
         instruction = input("  Task instruction: ").strip()
         if not instruction:

@@ -14,7 +14,7 @@ Each camera entry requires a `role` field (`"scene"`, `"left_wrist"`, or
 
 ```json
 {
-  "scene_camera_1":     {"serial": 37038161,       "type": "zed",       "role": "scene"},
+  "scene_camera":     {"serial": 37038161,       "type": "zed",       "role": "scene"},
   "left_wrist_camera":  {"serial": "123456789012", "type": "realsense", "role": "left_wrist"},
   "right_wrist_camera": {"serial": 14932342,       "type": "zed",       "role": "right_wrist"}
 }
@@ -70,9 +70,4 @@ Install the udev rule once so devices are accessible without `sudo`:
 sudo bash scripts/install_spacemouse_udev.sh
 ```
 
-Then unplug, replug, and log out/in. Use `rd list_devices` to find the
-`/dev/hidrawN` paths, and `scripts/test_spacemouse_read.py` to verify axes:
 
-```bash
-uv run python scripts/test_spacemouse_read.py --path-r /dev/hidraw4 --path-l /dev/hidraw5
-```

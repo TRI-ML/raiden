@@ -19,57 +19,23 @@ visualization.
 
 ## Installation
 
-Clone the repository with submodules and install dependencies:
-
-```bash
-git clone --recurse-submodules git@github.com:TRI-ML/raiden.git
-cd raiden
-uv sync
-```
-
-**ZED cameras** — install the [ZED SDK](https://www.stereolabs.com/developers/), then:
-
-```bash
-uv run python scripts/install_pyzed.py
-uv sync --extra zed
-```
-
-**TRI Stereo depth** — pull the ONNX model weights via Git LFS:
-
-```bash
-git lfs install
-git lfs pull
-```
-
-**Fast Foundation Stereo** — foundation model stereo depth:
-
-```bash
-uv run python scripts/install_ffs.py
-```
-
-Install `rd` as a shell command:
-
-```bash
-uv tool install -e .                                                    # base install
-uv tool install -e ".[zed]"                                             # + ZED cameras
-uv tool install -e ".[zed,tri-stereo]"                                  # + TRI Stereo depth (ONNX)
-uv tool install -e ".[zed,tri-stereo,tri-stereo-trt-cu12]"              # + TensorRT (CUDA 12)
-uv tool install -e ".[zed,tri-stereo,tri-stereo-trt-cu13]"              # + TensorRT (CUDA 13)
-```
-
-For TensorRT acceleration, see the [documentation](https://tri-ml.github.io/raiden/guide/).
+See the **[Installation guide](https://tri-ml.github.io/raiden/guide/installation/)** for full instructions.
 
 ## Commands
 
 | Command | Description |
 |---|---|
 | `rd list_devices` | List all connected cameras, arms, and SpaceMouse devices |
+| `rd record_calibration_poses` | Record robot poses for camera calibration |
 | `rd calibrate` | Calibrate cameras (hand-eye + scene extrinsics) |
 | `rd teleop` | Teleoperate arms without recording |
 | `rd record` | Record teleoperation demonstrations |
+| `rd replay` | Replay recorded follower arm motion |
 | `rd console` | Browse and correct demonstration metadata in a terminal UI |
 | `rd convert` | Convert successful recordings to a structured dataset |
+| `rd shardify` | Export converted episodes to WebDataset shards |
 | `rd visualize` | Visualize a converted recording with Rerun |
+| `rd serve` | Start the policy server for live inference |
 
 Run `rd <command> --help` for all options.
 
@@ -79,6 +45,8 @@ The following features are coming soon:
 
 - **Fin-ray gripper support** — support for fin-ray compliant grippers, which conform to object shapes for robust and gentle grasping.
 - **Policy training and inference** — built-in integration for policy training pipelines and closed-loop inference.
+- **LeRobot format converter** — export converted episodes to the [LeRobot](https://github.com/huggingface/lerobot) dataset format for compatibility with the Hugging Face ecosystem.
+- **Initial scene condition management** — set up and save named initial scene conditions in the console to enable reproducible, side-by-side comparison of multiple policies under identical starting states.
 
 ## Disclaimer
 

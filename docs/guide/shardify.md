@@ -64,12 +64,16 @@ policy should learn to predict.
 
 | Key | Shape | Description |
 |---|---|---|
-| `robot__action__poses__left::{robot}__xyz` | `(T, 3)` | Left EE position, left-arm-base frame |
-| `robot__action__poses__left::{robot}__rot_6d` | `(T, 6)` | Left EE rotation, 6D representation |
-| `robot__action__grippers__left::{robot}_hand` | `(T, 1)` | Left gripper command |
-| `robot__action__poses__right::{robot}__xyz` | `(T, 3)` | Right EE position, right-arm-base frame *(bimanual only)* |
-| `robot__action__poses__right::{robot}__rot_6d` | `(T, 6)` | Right EE rotation, 6D representation *(bimanual only)* |
-| `robot__action__grippers__right::{robot}_hand` | `(T, 1)` | Right gripper command *(bimanual only)* |
+| `robot__action__poses__left::yam__xyz` | `(T, 3)` | Left EE position, left-arm-base frame |
+| `robot__action__poses__left::yam__rot_6d` | `(T, 6)` | Left EE rotation, 6D representation |
+| `robot__action__poses__left::yam__xyz_relative` | `(T, 3)` | Left EE position relative to anchor actual pose |
+| `robot__action__poses__left::yam__rot_6d_relative` | `(T, 6)` | Left EE rotation relative to anchor actual pose |
+| `robot__action__grippers__left::yam_hand` | `(T, 1)` | Left gripper command |
+| `robot__action__poses__right::yam__xyz` | `(T, 3)` | Right EE position, right-arm-base frame *(bimanual only)* |
+| `robot__action__poses__right::yam__rot_6d` | `(T, 6)` | Right EE rotation, 6D representation *(bimanual only)* |
+| `robot__action__poses__right::yam__xyz_relative` | `(T, 3)` | Right EE position relative to anchor actual pose *(bimanual only)* |
+| `robot__action__poses__right::yam__rot_6d_relative` | `(T, 6)` | Right EE rotation relative to anchor actual pose *(bimanual only)* |
+| `robot__action__grippers__right::yam_hand` | `(T, 1)` | Right gripper command *(bimanual only)* |
 
 #### Proprioception (actual EE poses)
 
@@ -78,21 +82,33 @@ as the proprioceptive observation fed to the policy.
 
 | Key | Shape | Description |
 |---|---|---|
-| `robot__actual__poses__left::{robot}__xyz` | `(T, 3)` | Left actual EE position, left-arm-base frame |
-| `robot__actual__poses__left::{robot}__rot_6d` | `(T, 6)` | Left actual EE rotation, 6D representation |
-| `robot__actual__grippers__left::{robot}_hand` | `(T, 1)` | Left actual gripper position |
-| `robot__actual__poses__right::{robot}__xyz` | `(T, 3)` | Right actual EE position, right-arm-base frame *(bimanual only)* |
-| `robot__actual__poses__right::{robot}__rot_6d` | `(T, 6)` | Right actual EE rotation, 6D representation *(bimanual only)* |
-| `robot__actual__grippers__right::{robot}_hand` | `(T, 1)` | Right actual gripper position *(bimanual only)* |
+| `robot__actual__poses__left::yam__xyz` | `(T, 3)` | Left actual EE position, left-arm-base frame |
+| `robot__actual__poses__left::yam__rot_6d` | `(T, 6)` | Left actual EE rotation, 6D representation |
+| `robot__actual__poses__left::yam__xyz_relative` | `(T, 3)` | Left actual EE position relative to anchor actual pose |
+| `robot__actual__poses__left::yam__rot_6d_relative` | `(T, 6)` | Left actual EE rotation relative to anchor actual pose |
+| `robot__actual__grippers__left::yam_hand` | `(T, 1)` | Left actual gripper position |
+| `robot__actual__poses__right::yam__xyz` | `(T, 3)` | Right actual EE position, right-arm-base frame *(bimanual only)* |
+| `robot__actual__poses__right::yam__rot_6d` | `(T, 6)` | Right actual EE rotation, 6D representation *(bimanual only)* |
+| `robot__actual__poses__right::yam__xyz_relative` | `(T, 3)` | Right actual EE position relative to anchor actual pose *(bimanual only)* |
+| `robot__actual__poses__right::yam__rot_6d_relative` | `(T, 6)` | Right actual EE rotation relative to anchor actual pose *(bimanual only)* |
+| `robot__actual__grippers__right::yam_hand` | `(T, 1)` | Right actual gripper position *(bimanual only)* |
+
+The `_relative` variants express each pose as an SE(3) displacement from the **anchor frame's actual pose**:
+
+```
+T_relative = T_anchor_actual_inv @ T_t
+```
+
+The anchor is the sample's current timestep (`past_lowdim_steps` into the window), so the relative representation encodes how far the end-effector moves from its current position — useful for policies that predict relative actions.
 
 #### Joint positions
 
 | Key | Shape | Description |
 |---|---|---|
-| `robot__actual__joint_position__left::{robot}` | `(T, 7)` | Measured left joint positions (6 arm + 1 gripper) |
-| `robot__actual__joint_position__right::{robot}` | `(T, 7)` | Measured right joint positions *(bimanual only)* |
-| `robot__desired__joint_position__left::{robot}` | `(T, 7)` | Commanded left joint positions |
-| `robot__desired__joint_position__right::{robot}` | `(T, 7)` | Commanded right joint positions *(bimanual only)* |
+| `robot__actual__joint_position__left::yam` | `(T, 7)` | Measured left joint positions (6 arm + 1 gripper) |
+| `robot__actual__joint_position__right::yam` | `(T, 7)` | Measured right joint positions *(bimanual only)* |
+| `robot__desired__joint_position__left::yam` | `(T, 7)` | Commanded left joint positions |
+| `robot__desired__joint_position__right::yam` | `(T, 7)` | Commanded right joint positions *(bimanual only)* |
 
 #### Camera calibration and masks
 
@@ -103,7 +119,6 @@ as the proprioceptive observation fed to the policy.
 | `past_mask` | `(T,)` bool | `True` for past timesteps |
 | `future_mask` | `(T,)` bool | `True` for future timesteps |
 
-`{robot}` defaults to `yam` (configurable with `--robot-suffix`).
 
 The window length `T = past_lowdim_steps + 1 + future_lowdim_steps`
 (default: `1 + 1 + 19 = 21`).  The anchor frame sits at index
@@ -217,7 +232,6 @@ chain: env vars, `~/.aws/credentials`, instance profile, etc.).
 | `--max-padding-left` | `3` | Max allowed left padding |
 | `--max-padding-right` | `15` | Max allowed right padding |
 | `--samples-per-shard` | `100` | Samples per `.tar` file |
-| `--robot-suffix` | `yam` | Robot name used in lowdim key names |
 | `--jpeg-quality` | `95` | JPEG quality for re-encoded images |
 | `--resize-images` | `384x384` | Resize images to `HxW` before storing |
 | `--filter-still-samples` | off | Skip samples where neither arm moves |

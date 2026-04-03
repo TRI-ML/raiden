@@ -89,15 +89,15 @@ class RecordCommand:
     """Which arms to use: both (bimanual) or left arm only (single)"""
 
 
+_CAN_BITRATE = 1000000
+
+
 @dataclass
 class ResetCanCommand:
-    """Reset CAN interfaces (bring down then up at the target bitrate)"""
+    """Reset CAN interfaces (bring down then up)"""
 
     interfaces: List[str] = field(default_factory=list)
     """CAN interfaces to reset (default: all detected interfaces)"""
-
-    bitrate: int = 1000000
-    """CAN bitrate in bits/s (default: 1000000)"""
 
 
 @dataclass
@@ -621,11 +621,11 @@ def main():
                 print("No CAN interfaces found.")
                 sys.exit(1)
             print(
-                f"Resetting {len(interfaces)} CAN interface(s) at {command.bitrate} bps..."
+                f"Resetting {len(interfaces)} CAN interface(s) at {_CAN_BITRATE} bps..."
             )
             all_ok = True
             for iface in interfaces:
-                ok = reset_can_interface(iface, bitrate=command.bitrate)
+                ok = reset_can_interface(iface, bitrate=_CAN_BITRATE)
                 if ok:
                     print(f"  ✓ {iface}")
                 else:

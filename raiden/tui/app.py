@@ -21,6 +21,7 @@ from textual.widgets import (
 )
 
 from raiden.db.database import get_db, reset_db
+from raiden.recorder import validate_task_name
 
 _PAGE_SIZE = 20
 
@@ -1050,6 +1051,10 @@ class _TasksPane(Vertical):
         instruction = self.query_one("#task-instruction-input", Input).value.strip()
         if not name or not instruction:
             return
+        err = validate_task_name(name)
+        if err:
+            self.notify(err, severity="error")
+            return
         db = get_db()
         if db.get_task_by_name(name) is None:
             db.add_task(name, instruction)
@@ -1063,6 +1068,10 @@ class _TasksPane(Vertical):
         name = self.query_one("#task-name-input", Input).value.strip()
         instruction = self.query_one("#task-instruction-input", Input).value.strip()
         if task_id is not None and name and instruction:
+            err = validate_task_name(name)
+            if err:
+                self.notify(err, severity="error")
+                return
             get_db().update_task(task_id, name, instruction)
             self.query_one("#task-name-input", Input).value = ""
             self.query_one("#task-instruction-input", Input).value = ""
