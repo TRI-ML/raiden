@@ -293,7 +293,7 @@ class TRIStereoTrtDepthPredictor:
         if not self._engine_path.exists():
             raise RuntimeError(
                 f"TRI Stereo TensorRT engine not found: {self._engine_path}. "
-                "Compile it with trtexec after exporting the ONNX model."
+                "Run: rd make_tri_stereo_engine"
             )
 
         trt_logger = trt.Logger(trt.Logger.ERROR)
@@ -305,7 +305,7 @@ class TRIStereoTrtDepthPredictor:
             raise RuntimeError(
                 f"Failed to deserialize TRI Stereo TRT engine: {self._engine_path}. "
                 "The engine was likely compiled with a different TensorRT version. "
-                "Recompile it with: uv run python scripts/tri_stereo_tensorrt_build.py"
+                "Recompile it with: rd make_tri_stereo_engine"
             )
 
         # Infer input H×W from tensor dimensions.

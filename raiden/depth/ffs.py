@@ -269,7 +269,7 @@ class FFSOnnxDepthPredictor:
         if not feature_onnx.exists() or not post_onnx.exists():
             raise RuntimeError(
                 f"FFS ONNX models not found in '{self._onnx_dir}'. "
-                "Run: uv run python scripts/make_onnx.py"
+                "Run: rd make_ffs_onnx"
             )
 
         if yaml_path.exists():
@@ -473,7 +473,7 @@ class FFSTrtDepthPredictor:
             raise RuntimeError(
                 f"Failed to deserialize FFS TRT engine: {feature_engine}. "
                 "The engine was likely compiled with a different TensorRT version. "
-                "Recompile it with: uv run python scripts/make_onnx.py --build-engines"
+                "Recompile it with: rd make_ffs_onnx --build-engines"
             )
         del test_engine
 

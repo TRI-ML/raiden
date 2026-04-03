@@ -41,7 +41,7 @@ Export the pretrained model to ONNX format. The default input size (448×640)
 is chosen to fit ZED HD720 images efficiently:
 
 ```bash
-uv run python scripts/make_onnx.py
+rd make_ffs_onnx
 ```
 
 This writes `feature_runner.onnx`, `post_runner.onnx`, and `onnx.yaml` to
@@ -51,41 +51,25 @@ Options:
 
 | Flag | Default | Description |
 |---|---|---|
-| `--model_dir` | most recent `~/.config/raiden/weights/*.pth` | Path to the `.pth` checkpoint |
-| `--save_path` | `~/.config/raiden/weights/onnx/` | Output directory |
+| `--model-dir` | most recent `~/.config/raiden/weights/*.pth` | Path to the `.pth` checkpoint |
+| `--save-path` | `~/.config/raiden/weights/onnx/` | Output directory |
 | `--height` | `448` | ONNX input height (must be divisible by 32) |
 | `--width` | `640` | ONNX input width (must be divisible by 32) |
-| `--valid_iters` | `8` | Update iterations during forward pass |
-| `--max_disp` | `192` | Max disparity for the geometry encoding volume |
+| `--valid-iters` | `8` | Update iterations during forward pass |
+| `--max-disp` | `192` | Max disparity for the geometry encoding volume |
 | `--build-engines` | off | Also compile TensorRT engines after export |
 
 ## Step 2 - Compile to TensorRT engines
 
 Compile both ONNX models to TensorRT FP16 engines. This step runs once per
-machine and takes a few minutes. Pass `--build-engines` to `make_onnx.py` to
-do it in one shot:
+machine and takes a few minutes. Pass `--build-engines` to do it in one shot:
 
 ```bash
-uv run python scripts/make_onnx.py --build-engines
+rd make_ffs_onnx --build-engines
 ```
 
 This exports the ONNX files and immediately compiles the engines using the
 TensorRT Python API.
-
-Alternatively, compile manually with `trtexec` (delete any existing `.engine`
-files first to avoid stale-file issues):
-
-```bash
-rm -f ~/.config/raiden/weights/onnx/feature_runner.engine ~/.config/raiden/weights/onnx/post_runner.engine
-
-trtexec --onnx=~/.config/raiden/weights/onnx/feature_runner.onnx \
-        --saveEngine=~/.config/raiden/weights/onnx/feature_runner.engine \
-        --fp16
-
-trtexec --onnx=~/.config/raiden/weights/onnx/post_runner.onnx \
-        --saveEngine=~/.config/raiden/weights/onnx/post_runner.engine \
-        --fp16
-```
 
 ## Step 3 - Use
 

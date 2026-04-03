@@ -36,6 +36,8 @@ See the **[Installation guide](https://tri-ml.github.io/raiden/guide/installatio
 | `rd shardify` | Export converted episodes to WebDataset shards |
 | `rd visualize` | Visualize a converted recording with Rerun |
 | `rd serve` | Start the policy server for live inference |
+| `rd make_ffs_onnx` | Export Fast Foundation Stereo model to ONNX / TensorRT engines |
+| `rd make_tri_stereo_engine` | Compile TRI Stereo TensorRT engine from ONNX model |
 
 Run `rd <command> --help` for all options.
 

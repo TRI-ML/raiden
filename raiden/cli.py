@@ -13,6 +13,7 @@ from raiden._config import (
     CALIBRATION_POSES_FILE,
     CAMERA_CONFIG,
     SPACEMOUSE_CONFIG,
+    WEIGHTS_DIR,
 )
 from raiden.calibration.recorder import run_calibration_pose_recording
 from raiden.calibration.runner import CalibrationRunner
@@ -98,6 +99,49 @@ class ResetCanCommand:
 
     interfaces: List[str] = field(default_factory=list)
     """CAN interfaces to reset (default: all detected interfaces)"""
+
+
+@dataclass
+class MakeFfsOnnxCommand:
+    """Export Fast Foundation Stereo model to ONNX (and optionally TensorRT engines)"""
+
+    model_dir: Optional[str] = None
+    """Path to .pth checkpoint (default: most recently modified *.pth in ~/.config/raiden/weights/)"""
+
+    save_path: Optional[str] = None
+    """Directory to write ONNX files and onnx.yaml (default: ~/.config/raiden/weights/onnx/)"""
+
+    height: int = 448
+    """ONNX input height in pixels, must be divisible by 32"""
+
+    width: int = 640
+    """ONNX input width in pixels, must be divisible by 32"""
+
+    valid_iters: int = 8
+    """Number of GRU update iterations during forward pass"""
+
+    max_disp: int = 192
+    """Max disparity for the geometry encoding volume"""
+
+    build_engines: bool = False
+    """After exporting ONNX, also compile TensorRT engines via the Python API"""
+
+
+@dataclass
+class MakeTriStereoEngineCommand:
+    """Compile TRI Stereo TensorRT engine from ONNX model"""
+
+    variant: Literal["c32", "c64"] = "c64"
+    """Model variant"""
+
+    onnx: Optional[str] = None
+    """Input .onnx file (default: weights/tri_stereo/stereo_<variant>.onnx)"""
+
+    engine: Optional[str] = None
+    """Output .engine file (default: weights/tri_stereo/stereo_<variant>.engine)"""
+
+    fp16: bool = True
+    """Use FP16 precision"""
 
 
 @dataclass
@@ -362,6 +406,12 @@ def _print_help() -> None:
     print(
         "  serve                       Start the chiral policy server for live inference"
     )
+    print(
+        "  make_ffs_onnx               Export Fast Foundation Stereo model to ONNX / TensorRT engines"
+    )
+    print(
+        "  make_tri_stereo_engine      Compile TRI Stereo TensorRT engine from ONNX model"
+    )
     print()
     print("Run 'rd <command> --help' for more information on a command.")
 
@@ -612,7 +662,7 @@ def main():
             sys.argv.pop(1)
             command = tyro.cli(
                 ResetCanCommand,
-                description="Reset CAN interfaces (bring down then up at the target bitrate)",
+                description="Reset CAN interfaces (bring down then up)",
             )
             from raiden.robot.controller import list_can_interfaces, reset_can_interface
 
@@ -661,6 +711,221 @@ def main():
                 no_depth=command.no_depth,
                 resize_images_size=resize,
             )
+
+        elif subcommand == "make_ffs_onnx":
+            sys.argv.pop(1)
+            command = tyro.cli(
+                MakeFfsOnnxCommand,
+                description="Export Fast Foundation Stereo model to ONNX (and optionally TensorRT engines)",
+            )
+            import os
+            from pathlib import Path as _Path  # noqa: PLC0415
+
+            import onnx
+            import torch
+            import yaml
+            from omegaconf import OmegaConf
+
+            os.environ.setdefault("TORCH_COMPILE_DISABLE", "1")
+            os.environ.setdefault("TORCHDYNAMO_DISABLE", "1")
+
+            _ffs_dir = (
+                _Path(__file__).parent.parent / "third_party" / "Fast-FoundationStereo"
+            )
+            sys.path.insert(0, str(_ffs_dir))
+            from core.foundation_stereo import (  # noqa: PLC0415
+                TrtFeatureRunner,
+                TrtPostRunner,
+                build_gwc_volume_triton,
+            )
+
+            save_path = _Path(command.save_path or str(WEIGHTS_DIR / "onnx"))
+            save_path.mkdir(parents=True, exist_ok=True)
+
+            assert command.height % 32 == 0 and command.width % 32 == 0, (
+                f"height ({command.height}) and width ({command.width}) must both be divisible by 32"
+            )
+
+            model_dir = command.model_dir
+            if model_dir is None:
+                ckpts = sorted(
+                    WEIGHTS_DIR.glob("*.pth"),
+                    key=lambda p: p.stat().st_mtime,
+                    reverse=True,
+                )
+                if not ckpts:
+                    print(f"No *.pth checkpoint found in '{WEIGHTS_DIR}'")
+                    sys.exit(1)
+                model_dir = str(ckpts[0])
+
+            print(f"Checkpoint : {model_dir}")
+            print(f"Input size : {command.height} x {command.width}")
+            print(f"Output dir : {save_path}")
+
+            torch.autograd.set_grad_enabled(False)
+            print("\nLoading model...")
+            model = torch.load(model_dir, map_location="cpu", weights_only=False)
+            model.args.max_disp = command.max_disp
+            model.args.valid_iters = command.valid_iters
+            model.cuda().eval()
+
+            feature_runner = TrtFeatureRunner(model).cuda().eval()
+            post_runner = TrtPostRunner(model).cuda().eval()
+
+            left_img = torch.randn(1, 3, command.height, command.width).cuda().float() * 255
+            right_img = torch.randn(1, 3, command.height, command.width).cuda().float() * 255
+
+            feature_onnx_path = save_path / "feature_runner.onnx"
+            print("\nExporting feature_runner.onnx ...")
+            torch.onnx.export(
+                feature_runner,
+                (left_img, right_img),
+                str(feature_onnx_path),
+                opset_version=17,
+                input_names=["left", "right"],
+                output_names=[
+                    "features_left_04",
+                    "features_left_08",
+                    "features_left_16",
+                    "features_left_32",
+                    "features_right_04",
+                    "stem_2x",
+                ],
+                do_constant_folding=True,
+            )
+            _data_file = feature_onnx_path.with_suffix(".onnx.data")
+            if _data_file.exists():
+                print("  Merging external data into single file ...")
+                _m = onnx.load(str(feature_onnx_path))
+                onnx.save(_m, str(feature_onnx_path))
+                _data_file.unlink(missing_ok=True)
+
+            print("Exporting post_runner.onnx ...")
+            (
+                features_left_04,
+                features_left_08,
+                features_left_16,
+                features_left_32,
+                features_right_04,
+                stem_2x,
+            ) = feature_runner(left_img, right_img)
+            gwc_volume = build_gwc_volume_triton(
+                features_left_04.half(),
+                features_right_04.half(),
+                command.max_disp // 4,
+                model.cv_group,
+            )
+            torch.onnx.export(
+                post_runner,
+                (
+                    features_left_04,
+                    features_left_08,
+                    features_left_16,
+                    features_left_32,
+                    features_right_04,
+                    stem_2x,
+                    gwc_volume,
+                ),
+                str(save_path / "post_runner.onnx"),
+                opset_version=17,
+                input_names=[
+                    "features_left_04",
+                    "features_left_08",
+                    "features_left_16",
+                    "features_left_32",
+                    "features_right_04",
+                    "stem_2x",
+                    "gwc_volume",
+                ],
+                output_names=["disp"],
+                do_constant_folding=True,
+                dynamo=False,
+            )
+
+            cfg = OmegaConf.to_container(model.args)
+            cfg["image_h"] = command.height
+            cfg["image_w"] = command.width
+            cfg["cv_group"] = model.cv_group
+            with open(save_path / "onnx.yaml", "w") as f:
+                yaml.safe_dump(cfg, f)
+
+            print(f"\nDone. Files written to {save_path}/")
+
+            if command.build_engines:
+                import tensorrt as trt  # noqa: PLC0415
+
+                trt_logger = trt.Logger(trt.Logger.WARNING)
+                trt.init_libnvinfer_plugins(trt_logger, "")
+                for name in ("feature_runner", "post_runner"):
+                    onnx_path = save_path / f"{name}.onnx"
+                    engine_path = save_path / f"{name}.engine"
+                    print(f"\nBuilding {name}.engine (may take several minutes)...")
+                    builder = trt.Builder(trt_logger)
+                    network = builder.create_network()
+                    parser = trt.OnnxParser(network, trt_logger)
+                    with open(onnx_path, "rb") as f:
+                        ok = parser.parse(f.read())
+                    if not ok:
+                        for i in range(parser.num_errors):
+                            print(f"  Parse error: {parser.get_error(i)}")
+                        print(f"Failed to parse {onnx_path}")
+                        sys.exit(1)
+                    config = builder.create_builder_config()
+                    config.set_flag(trt.BuilderFlag.FP16)
+                    engine_mem = builder.build_serialized_network(network, config)
+                    if engine_mem is None:
+                        print(f"TensorRT failed to build engine for {name}")
+                        sys.exit(1)
+                    engine_bytes = bytes(engine_mem)
+                    print(f"  Engine size: {len(engine_bytes) / 1024 / 1024:.1f} MiB")
+                    with open(engine_path, "wb") as f:
+                        f.write(engine_bytes)
+                    print(f"  Saved {engine_path}")
+                print("\nTensorRT engines ready. rd convert will use them automatically.")
+
+        elif subcommand == "make_tri_stereo_engine":
+            sys.argv.pop(1)
+            command = tyro.cli(
+                MakeTriStereoEngineCommand,
+                description="Compile TRI Stereo TensorRT engine from ONNX model",
+            )
+            import tensorrt as trt  # noqa: PLC0415
+            from pathlib import Path as _Path  # noqa: PLC0415
+
+            _tri_stereo_weights = _Path(__file__).parent.parent / "weights" / "tri_stereo"
+            onnx_path = _Path(command.onnx) if command.onnx else _tri_stereo_weights / f"stereo_{command.variant}.onnx"
+            engine_path = _Path(command.engine) if command.engine else _tri_stereo_weights / f"stereo_{command.variant}.engine"
+
+            if not onnx_path.exists():
+                print(f"ONNX model not found: {onnx_path}")
+                print("Run: git lfs pull")
+                sys.exit(1)
+
+            print(f"ONNX    : {onnx_path}")
+            print(f"Engine  : {engine_path}")
+            print(f"FP16    : {command.fp16}")
+            print("\nBuilding TensorRT engine (may take several minutes)...")
+
+            trt_logger = trt.Logger(trt.Logger.ERROR)
+            trt_builder = trt.Builder(trt_logger)
+            trt_network = trt_builder.create_network(
+                1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)
+            )
+            trt_parser = trt.OnnxParser(trt_network, trt_logger)
+            if not trt_parser.parse_from_file(str(onnx_path)):
+                print(f"Failed to parse ONNX model: {onnx_path}")
+                sys.exit(1)
+            trt_config = trt_builder.create_builder_config()
+            if command.fp16:
+                trt_config.set_flag(trt.BuilderFlag.FP16)
+            serialized = trt_builder.build_serialized_network(trt_network, trt_config)
+            if serialized is None:
+                print("TensorRT engine build failed.")
+                sys.exit(1)
+            engine_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(engine_path, "wb") as f:
+                f.write(serialized)
+            print(f"\nSaved engine to {engine_path}")
 
         else:
             _print_help()
