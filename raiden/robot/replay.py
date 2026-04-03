@@ -29,7 +29,6 @@ import numpy as np
 from i2rt.robots.kinematics import Kinematics
 
 from raiden._xml_paths import get_yam_4310_linear_xml_path
-
 from raiden.robot.controller import RobotController, smooth_move_joints
 
 
@@ -156,6 +155,19 @@ def _get_kinematics() -> Kinematics:
     return Kinematics(get_yam_4310_linear_xml_path(), "grasp_site")
 
 
+def _ik_6dof(
+    kin: Kinematics, target_pose: np.ndarray, init_q: np.ndarray
+) -> Tuple[bool, np.ndarray]:
+    """IK wrapper that pads init_q to model nq and returns only the 6 arm joints."""
+    nq = kin._configuration.model.nq
+    if len(init_q) < nq:
+        q_full = np.zeros(nq, dtype=np.float64)
+        q_full[: len(init_q)] = init_q
+        init_q = q_full
+    success, q = kin.ik(target_pose, "grasp_site", init_q=init_q)
+    return success, q[:6]
+
+
 def _solve_ik_sequence(
     actions: np.ndarray,
     use_right: bool,
@@ -193,12 +205,12 @@ def _solve_ik_sequence(
 
     for i, act in enumerate(actions):
         T_tcp_l = _pose_from_action(act, offset=0)
-        _, q_l = kin.ik(T_tcp_l, "grasp_site", init_q=q_l)
+        _, q_l = _ik_6dof(kin, T_tcp_l, q_l)
         keys_l[i] = q_l
 
         if use_right and q_r is not None:
             T_tcp_r = _pose_from_action(act, offset=13)
-            _, q_r = kin.ik(T_tcp_r, "grasp_site", init_q=q_r)
+            _, q_r = _ik_6dof(kin, T_tcp_r, q_r)
             keys_r[i] = q_r
 
         if (i + 1) % 30 == 0 or i == n_keys - 1:

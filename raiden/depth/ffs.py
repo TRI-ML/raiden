@@ -29,7 +29,6 @@ import numpy as np
 
 from raiden._config import WEIGHTS_DIR as _WEIGHTS_DIR_CFG
 
-
 # Path to the FFS clone (set by install_ffs.py).
 _FFS_DIR = Path(__file__).parent.parent.parent / "third_party" / "Fast-FoundationStereo"
 
@@ -253,6 +252,7 @@ class FFSOnnxDepthPredictor:
             return
 
         import sys
+
         import yaml
 
         try:
@@ -442,6 +442,7 @@ class FFSTrtDepthPredictor:
             return
 
         import sys
+
         import yaml
         from omegaconf import OmegaConf
 

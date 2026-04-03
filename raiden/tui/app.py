@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from textual import on
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
-from textual import on
 from textual.message import Message
 from textual.screen import ModalScreen
 from textual.widgets import (

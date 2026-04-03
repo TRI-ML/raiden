@@ -120,6 +120,24 @@ class RecordCalibrationPosesCommand:
     output_file: str = CALIBRATION_POSES_FILE
     """Path to save calibration poses"""
 
+    control: Literal["leader", "spacemouse"] = "leader"
+    """Control mode: leader-follower arms or SpaceMouse EE velocity control"""
+
+    spacemouse_path_r: str = "/dev/hidraw7"
+    """hidraw path for the right-arm SpaceMouse (spacemouse mode only)"""
+
+    spacemouse_path_l: str = "/dev/hidraw6"
+    """hidraw path for the left-arm SpaceMouse (spacemouse mode only)"""
+
+    vel_scale: float = 0.12
+    """Max translational speed in m/s at full deflection (spacemouse mode only)"""
+
+    rot_scale: float = 3.0
+    """Max rotational speed in rad/s at full deflection (spacemouse mode only)"""
+
+    invert_rotation: bool = False
+    """Negate all SpaceMouse rotation axes (spacemouse mode only)"""
+
 
 @dataclass
 class CalibrateCommand:
@@ -431,10 +449,17 @@ def main():
                 RecordCalibrationPosesCommand,
                 description="Record robot poses for camera calibration",
             )
+            sm = _load_spacemouse_config()
             run_calibration_pose_recording(
                 min_poses=command.min_poses,
                 output_file=command.output_file,
                 camera_config_file=CAMERA_CONFIG,
+                control=command.control,
+                spacemouse_path_r=sm.get("path_r", command.spacemouse_path_r),
+                spacemouse_path_l=sm.get("path_l", command.spacemouse_path_l),
+                vel_scale=command.vel_scale,
+                rot_scale=command.rot_scale,
+                invert_rotation=command.invert_rotation,
             )
 
         elif subcommand == "calibrate":

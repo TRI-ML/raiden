@@ -14,11 +14,8 @@ then install:
 
 ```bash
 sudo apt-get install --no-install-recommends libnvinfer-bin libnvinfer-dev libnvinfer-headers-dev
-uv sync --extra ffs --extra ffs-trt-cu12   # CUDA 12
-uv sync --extra ffs --extra ffs-trt-cu13   # CUDA 13
-
-# with ZED cameras
-uv sync --extra zed --extra ffs --extra ffs-trt-cu12
+uv tool install --reinstall -e ".[zed,ffs,ffs-trt-cu12]"    # CUDA 12
+uv tool install --reinstall -e ".[zed,ffs,ffs-trt-cu13]"    # CUDA 13
 ```
 
 !!! note

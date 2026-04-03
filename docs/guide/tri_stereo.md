@@ -31,7 +31,7 @@ git lfs pull
 **2. Install the `tri-stereo` extra**
 
 ```bash
-uv sync --extra tri-stereo
+uv tool install --reinstall -e ".[zed,tri-stereo]"
 ```
 
 This installs `onnxruntime-gpu` for the ONNX backend.
@@ -59,11 +59,8 @@ then install:
 
 ```bash
 sudo apt-get install --no-install-recommends libnvinfer-bin libnvinfer-dev libnvinfer-headers-dev
-uv sync --extra tri-stereo --extra tri-stereo-trt-cu12   # CUDA 12
-uv sync --extra tri-stereo --extra tri-stereo-trt-cu13   # CUDA 13
-
-# with ZED cameras
-uv sync --extra zed --extra tri-stereo --extra tri-stereo-trt-cu12
+uv tool install --reinstall -e ".[zed,tri-stereo,tri-stereo-trt-cu12]"    # CUDA 12
+uv tool install --reinstall -e ".[zed,tri-stereo,tri-stereo-trt-cu13]"    # CUDA 13
 ```
 
 !!! note

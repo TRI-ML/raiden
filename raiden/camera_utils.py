@@ -1,7 +1,10 @@
 """Device listing utilities — cameras, robot arms, and SpaceMouse."""
 
+import json
 import subprocess
+from pathlib import Path
 
+from raiden._config import CAMERA_CONFIG, SPACEMOUSE_CONFIG
 
 # ---------------------------------------------------------------------------
 # Cameras
@@ -148,32 +151,64 @@ def list_devices() -> None:
     else:
         print("  (none)")
 
-    # ── Example camera.json ────────────────────────────────────────
-    if zed_cams or rs_cams:
+    # ── Auto-generate camera.json if missing ─────────────────────────────
+    print("\nConfig files stored in: ~/.config/raiden/")
+    print("-" * 40)
+    if (zed_cams or rs_cams) and not Path(CAMERA_CONFIG).exists():
         _ROLE_ASSIGNMENTS = [
-            ("scene_1", "scene"),
-            ("right_wrist", "right_wrist"),
-            ("left_wrist", "left_wrist"),
+            ("scene_camera", "scene"),
+            ("right_wrist_camera", "right_wrist"),
+            ("left_wrist_camera", "left_wrist"),
         ]
         all_cameras = [{"serial": c["serial"], "type": "zed"} for c in zed_cams] + [
             {"serial": c["serial"], "type": "realsense"} for c in rs_cams
         ]
-        print("\nExample config/camera.json:")
-        print("{")
-        entries = []
+        config: dict = {}
         for i, cam in enumerate(all_cameras):
             key, role = (
                 _ROLE_ASSIGNMENTS[i]
                 if i < len(_ROLE_ASSIGNMENTS)
-                else (f"scene_{i}", "scene")
+                else (f"scene_{i + 1}", "scene")
             )
-            serial_val = cam["serial"] if cam["type"] == "zed" else f'"{cam["serial"]}"'
-            comma = "," if i < len(all_cameras) - 1 else ""
-            entries.append(
-                f'  "{key}": {{"serial": {serial_val}, "type": "{cam["type"]}", "role": "{role}"}}{comma}'
-                f"  // TODO: verify assignment"
+            config[key] = {"serial": cam["serial"], "type": cam["type"], "role": role}
+        Path(CAMERA_CONFIG).parent.mkdir(parents=True, exist_ok=True)
+        with open(CAMERA_CONFIG, "w") as f:
+            json.dump(config, f, indent=2)
+        print("  ✓ Generated camera.json:")
+        print(f"    {json.dumps(config, indent=2)}")
+        print(
+            "  WARNING: left/right wrist assignment is based on detection order and"
+            " may be swapped — verify and edit camera.json if needed."
+        )
+    else:
+        status = (
+            "already exists" if Path(CAMERA_CONFIG).exists() else "no cameras found"
+        )
+        print(f"  camera.json: {status}")
+
+    # ── Auto-generate spacemouse.json if missing ──────────────────────────
+    if mice and not Path(SPACEMOUSE_CONFIG).exists():
+        sm_config: dict = {}
+        if len(mice) >= 1:
+            sm_config["path_r"] = mice[0]["path"]
+        if len(mice) >= 2:
+            sm_config["path_l"] = mice[1]["path"]
+        Path(SPACEMOUSE_CONFIG).parent.mkdir(parents=True, exist_ok=True)
+        with open(SPACEMOUSE_CONFIG, "w") as f:
+            json.dump(sm_config, f, indent=2)
+        print("  ✓ Generated spacemouse.json:")
+        print(f"    {json.dumps(sm_config, indent=2)}")
+        if len(mice) >= 2:
+            print(
+                "  WARNING: left/right SpaceMouse assignment is based on detection"
+                " order and may be swapped — verify and edit spacemouse.json if needed."
             )
-        print("\n".join(entries))
-        print("}")
+    else:
+        status = (
+            "already exists"
+            if Path(SPACEMOUSE_CONFIG).exists()
+            else "no SpaceMouse found"
+        )
+        print(f"  spacemouse.json: {status}")
 
     print()

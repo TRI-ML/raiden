@@ -2,14 +2,20 @@
 
 import json
 import sys
+import threading
 import time
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
+from urllib.parse import quote
+
+import cv2
+import rerun as rr
 
 from raiden._config import CALIBRATION_POSES_FILE, CAMERA_CONFIG
 from raiden.camera_config import CameraConfig
+from raiden.cameras.base import Camera
 from raiden.robot.controller import RobotController
 
 
@@ -60,6 +66,12 @@ class CalibrationPoseRecorder:
         output_file: str = CALIBRATION_POSES_FILE,
         camera_config_file: str = CAMERA_CONFIG,
         charuco_config: Optional[ChArUcoBoardConfig] = None,
+        control: str = "leader",
+        spacemouse_path_r: str = "/dev/hidraw7",
+        spacemouse_path_l: str = "/dev/hidraw6",
+        vel_scale: float = 2.0,
+        rot_scale: float = 3.0,
+        invert_rotation: bool = False,
     ):
         self.output_file = Path(output_file)
         self.output_file.parent.mkdir(parents=True, exist_ok=True)
@@ -68,8 +80,19 @@ class CalibrationPoseRecorder:
         self.charuco_config = charuco_config or ChArUcoBoardConfig()
         self.poses: List[CalibrationPose] = []
 
+        self.control = control
+        self.spacemouse_path_r = spacemouse_path_r
+        self.spacemouse_path_l = spacemouse_path_l
+        self.vel_scale = vel_scale
+        self.rot_scale = rot_scale
+        self.invert_rotation = invert_rotation
+
         self.robot_controller: Optional[RobotController] = None
         self.calibration_targets: List[str] = []
+
+        self.cameras: Dict[str, Camera] = {}
+        self._camera_roles: Dict[str, Optional[str]] = {}
+        self._rerun_stop_event = threading.Event()
 
     def initialize_robots(self):
         """Initialize robots based on which wrist cameras are in camera.json."""
@@ -91,15 +114,27 @@ class CalibrationPoseRecorder:
             if cam not in self.calibration_targets:
                 self.calibration_targets.append(cam)
 
+        use_leaders = self.control != "spacemouse"
         self.robot_controller = RobotController(
-            use_right_leader=has_right,
-            use_left_leader=has_left,
+            use_right_leader=use_leaders and has_right,
+            use_left_leader=use_leaders and has_left,
             use_right_follower=has_right,
             use_left_follower=has_left,
         )
 
-        # Complete setup: check CAN -> init -> home -> grav comp -> start teleop
+        # Complete setup: check CAN -> init -> home -> grav comp
         self.robot_controller.setup_for_teleop_recording()
+
+        if self.control == "spacemouse":
+            self.robot_controller.warmup_spacemouse_ik()
+            self.robot_controller.attach_spacemice(
+                self.spacemouse_path_r, self.spacemouse_path_l
+            )
+            self.robot_controller.start_spacemouse_teleop(
+                vel_scale=self.vel_scale,
+                rot_scale=self.rot_scale,
+                invert_rotation=self.invert_rotation,
+            )
 
     def record_current_pose(self, notes: str = "") -> CalibrationPose:
         """Record the current robot pose"""
@@ -172,6 +207,69 @@ class CalibrationPoseRecorder:
 
         print(f"\n✓ Saved {len(self.poses)} poses to {self.output_file}")
 
+    def _open_cameras(self, warmup_frames: int = 10) -> None:
+        """Open all cameras from config for live Rerun visualization."""
+        cfg = CameraConfig(self.camera_config_file)
+        for name in cfg.list_camera_names():
+            try:
+                cam = cfg.create_camera(name)
+                cam.open()
+                self.cameras[name] = cam
+                self._camera_roles[name] = cfg.get_role(name)
+            except Exception as e:
+                print(f"  Warning: could not open camera '{name}': {e}")
+        if self.cameras:
+            print(f"  Warming up {len(self.cameras)} camera(s)...")
+            for _ in range(warmup_frames):
+                for cam in self.cameras.values():
+                    cam.grab()
+
+    def _rerun_stream(self) -> None:
+        rr.init("raiden_calibration")
+        grpc_port = 9878
+        web_port = 9877
+        server_uri = rr.serve_grpc(grpc_port=grpc_port)
+        rr.serve_web_viewer(web_port=web_port, open_browser=False)
+        viewer_url = f"http://localhost:{web_port}?url={quote(server_uri, safe='')}"
+        print(f"\nRerun viewer:    {viewer_url}")
+        print(
+            f"SSH tunnel:      ssh -L {web_port}:localhost:{web_port} -L {grpc_port}:localhost:{grpc_port} <host>"
+        )
+        print()
+        frame_idx = 0
+        while not self._rerun_stop_event.is_set():
+            # Drain the camera buffer by grabbing at full rate, but only log once per second.
+            for name, cam in self.cameras.items():
+                try:
+                    if cam.grab():
+                        frame = cam.get_frame()
+                        color = frame.color
+                        if self._camera_roles.get(name) == "right_wrist":
+                            color = cv2.rotate(color, cv2.ROTATE_180)
+                        img_rgb = color[:, :, ::-1]  # BGR → RGB
+                        rr.set_time("frame", sequence=frame_idx)
+                        rr.log(f"cameras/{name}", rr.Image(img_rgb))
+                except Exception:
+                    pass
+            frame_idx += 1
+            self._rerun_stop_event.wait(1.0)
+
+    def _start_rerun_stream(self) -> None:
+        if not self.cameras:
+            return
+        self._rerun_stop_event.clear()
+        self._rerun_thread = threading.Thread(target=self._rerun_stream, daemon=True)
+        self._rerun_thread.start()
+        print(f"  ✓ Rerun stream started ({len(self.cameras)} camera(s))")
+
+    def _stop_rerun_stream(self) -> None:
+        self._rerun_stop_event.set()
+        if hasattr(self, "_rerun_thread"):
+            self._rerun_thread.join(timeout=2.0)
+        for cam in self.cameras.values():
+            cam.close()
+        self.cameras.clear()
+
     def run_interactive_recording(self, min_poses: int = 5):
         """Run interactive pose recording session"""
         import select
@@ -182,6 +280,11 @@ class CalibrationPoseRecorder:
         print("\n" + "=" * 70)
         print("  Raiden - Camera Calibration Pose Recording")
         print("=" * 70)
+
+        # Open cameras and start Rerun visualization
+        print("\nOpening cameras for live visualization...")
+        self._open_cameras()
+        self._start_rerun_stream()
 
         # Initialize robots
         self.initialize_robots()
@@ -207,9 +310,15 @@ class CalibrationPoseRecorder:
 
         print("\nInstructions:")
         print("  1. Position the ChArUco board in a fixed location")
-        print("  2. Move the LEADER arms - followers will automatically follow")
+        if self.control == "spacemouse":
+            print("  2. Move the robot arms using SpaceMouse")
+        else:
+            print("  2. Move the LEADER arms - followers will automatically follow")
         print("  3. Position so the board is clearly visible from the camera(s)")
-        print("  4. Press button on any leader arm OR type 'r' to record pose")
+        if self.control == "spacemouse":
+            print("  4. Type 'r' to record pose")
+        else:
+            print("  4. Press button on any leader arm OR type 'r' to record pose")
         print(
             f"  5. Record at least {min_poses} diverse poses (vary distance and angle)"
         )
@@ -255,9 +364,13 @@ class CalibrationPoseRecorder:
                 # Monitor button presses in a loop
                 command = None
                 while command is None:
-                    # Check for button press
-                    if has_leaders and self.check_button_press():
-                        print("\n\n🔘 Button pressed! Recording pose...")
+                    # Check for button press (leader mode only)
+                    if (
+                        has_leaders
+                        and self.control != "spacemouse"
+                        and self.check_button_press()
+                    ):
+                        print("\n\nButton pressed! Recording pose...")
                         time.sleep(0.5)  # Debounce
                         command = "r"
                         break
@@ -342,7 +455,7 @@ class CalibrationPoseRecorder:
                     print("  l - List recorded poses")
                     print("  q - Quit and save")
                     print("  h - Show help")
-                    if has_leaders:
+                    if has_leaders and self.control != "spacemouse":
                         print("\nButton Input:")
                         print("  - Press button on any leader arm to record")
 
@@ -372,6 +485,7 @@ class CalibrationPoseRecorder:
             if self.robot_controller and self.robot_controller.has_robots():
                 self.robot_controller.emergency_stop()
         finally:
+            self._stop_rerun_stream()
             # Cleanup robots
             if self.robot_controller:
                 self.robot_controller.cleanup()
@@ -382,11 +496,23 @@ def run_calibration_pose_recording(
     output_file: str = CALIBRATION_POSES_FILE,
     camera_config_file: str = CAMERA_CONFIG,
     charuco_config: Optional[ChArUcoBoardConfig] = None,
+    control: str = "leader",
+    spacemouse_path_r: str = "/dev/hidraw7",
+    spacemouse_path_l: str = "/dev/hidraw6",
+    vel_scale: float = 2.0,
+    rot_scale: float = 3.0,
+    invert_rotation: bool = False,
 ):
     """Main entry point for calibration pose recording"""
     recorder = CalibrationPoseRecorder(
         output_file=output_file,
         camera_config_file=camera_config_file,
         charuco_config=charuco_config,
+        control=control,
+        spacemouse_path_r=spacemouse_path_r,
+        spacemouse_path_l=spacemouse_path_l,
+        vel_scale=vel_scale,
+        rot_scale=rot_scale,
+        invert_rotation=invert_rotation,
     )
     recorder.run_interactive_recording(min_poses=min_poses)

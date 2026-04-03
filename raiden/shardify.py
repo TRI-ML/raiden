@@ -31,7 +31,6 @@ import cv2
 import numpy as np
 from PIL import Image
 
-
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -383,9 +382,7 @@ def _build_window_arrays(
     # with the RGB and depth images.  Shape: (len(image_indices), 3, 3) and
     # (len(image_indices), 4, 4) respectively.
     anchor_frame = frames[anchor_idx]
-    img_frame_indices = [
-        _clamp_frame(anchor_idx + i, n) for i in config.image_indices
-    ]
+    img_frame_indices = [_clamp_frame(anchor_idx + i, n) for i in config.image_indices]
     for cam_name in output_cam_names:
         src_cam = _reverse_map(config.camera_name_map, cam_name)
         K = anchor_frame.get("intrinsics", {}).get(src_cam)
@@ -416,8 +413,8 @@ def _build_window_arrays(
         if anc_xyz_key not in out:
             continue  # arm not present (single-arm episode)
 
-        anc_xyz = out[anc_xyz_key][anchor_i]        # (3,)
-        anc_rot6d = out[anc_rot_key][anchor_i]      # (6,)
+        anc_xyz = out[anc_xyz_key][anchor_i]  # (3,)
+        anc_rot6d = out[anc_rot_key][anchor_i]  # (6,)
         T_anc_inv = np.linalg.inv(_build_transform(anc_xyz, anc_rot6d))  # (4, 4)
 
         for src in ("action", "actual"):
@@ -435,15 +432,15 @@ def _build_window_arrays(
             if xyz_key not in out:
                 continue
 
-            xyz_seq   = out[xyz_key]   # (T, 3)
-            rot6d_seq = out[rot_key]   # (T, 6)
+            xyz_seq = out[xyz_key]  # (T, 3)
+            rot6d_seq = out[rot_key]  # (T, 6)
 
-            rel_xyz   = np.empty_like(xyz_seq)
+            rel_xyz = np.empty_like(xyz_seq)
             rel_rot6d = np.empty_like(rot6d_seq)
             for i in range(xyz_seq.shape[0]):
                 T_t = _build_transform(xyz_seq[i], rot6d_seq[i])
                 T_rel = T_anc_inv @ T_t
-                rel_xyz[i]   = T_rel[:3, 3].astype(np.float32)
+                rel_xyz[i] = T_rel[:3, 3].astype(np.float32)
                 rel_rot6d[i] = T_rel[:2, :3].flatten().astype(np.float32)
 
             out[out_xyz] = rel_xyz
@@ -838,7 +835,9 @@ def run_shardify(
             left_frames_needed = config.past_lowdim_steps * s
             right_frames_needed = config.future_lowdim_steps * s
             left_pad = max(0, -(-max(0, left_frames_needed - t) // s))
-            right_pad = max(0, -(-max(0, right_frames_needed - (n_frames - 1 - t)) // s))
+            right_pad = max(
+                0, -(-max(0, right_frames_needed - (n_frames - 1 - t)) // s)
+            )
 
             if (
                 left_pad > config.max_padding_left
@@ -910,9 +909,9 @@ def run_shardify(
                         sample_files[f"{sample_uuid}.{out_cam}_{suffix}.jpg"] = rgb
                     depth = _load_depth_png(ep_dir, src_cam, abs_frame)
                     if depth is not None:
-                        sample_files[
-                            f"{sample_uuid}.{out_cam}_{suffix}.depth.png"
-                        ] = depth
+                        sample_files[f"{sample_uuid}.{out_cam}_{suffix}.depth.png"] = (
+                            depth
+                        )
 
             # ── serialize lowdim ─────────────────────────────────────────
             buf = io.BytesIO()

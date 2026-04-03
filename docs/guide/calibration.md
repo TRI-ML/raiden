@@ -29,6 +29,18 @@ least **5 poses** are required; 7–10 is recommended for good coverage.
 rd record_calibration_poses
 ```
 
+A live Rerun viewer opens automatically in your browser so you can verify that
+the board is visible from all cameras before recording each pose. The URL and
+an SSH tunnel command are printed to the terminal:
+
+```
+Rerun viewer:    http://localhost:9877?url=...
+SSH tunnel:      ssh -L 9877:localhost:9877 -L 9878:localhost:9878 <host>
+```
+
+Images are refreshed at **1 Hz**. The right wrist camera image is
+automatically rotated 180° to correct for its upside-down mounting.
+
 Keyboard controls:
 
 - **R** - record current pose

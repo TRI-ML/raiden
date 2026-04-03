@@ -99,7 +99,7 @@ _PROPRIO_HISTORY_SIZE = 64
 # abrupt policy jumps while allowing normal motion.
 _DEFAULT_MAX_JOINT_DELTA = 0.2  # radians
 
-_CONTROL_HZ = 15.0
+_CONTROL_HZ = 10.0
 
 # Lazily-loaded MuJoCo kinematics instance (shared across calls).
 _kinematics: Any = None
@@ -597,14 +597,12 @@ class RaidenPolicyServer(chiral.PolicyServer):
 
         for i, step_action in enumerate(action):
             step_action = step_action.reshape(-1)
-            print("step_action", step_action[-1:])
 
             if self._action_type == "ee_pose":
                 joint_cmd = self._ee_pose_to_joint_cmd(step_action)
             else:
                 joint_cmd = step_action
 
-            print("joint_cmd", joint_cmd[-1:])
             # Safety check: abort if any joint delta exceeds the threshold.
             self._check_joint_delta(joint_cmd)
 
@@ -795,7 +793,7 @@ class RaidenPolicyServer(chiral.PolicyServer):
                 args=(self._robot.follower_l, joint_cmd[:DOF]),
                 kwargs={
                     "time_interval_s": 1.0 / _CONTROL_HZ,
-                    "steps": 200,
+                    "steps": 12,
                     "stop_event": self._estop_active,
                 },
                 daemon=True,
@@ -807,7 +805,7 @@ class RaidenPolicyServer(chiral.PolicyServer):
                 args=(self._robot.follower_r, joint_cmd[DOF : DOF * 2]),
                 kwargs={
                     "time_interval_s": 1.0 / _CONTROL_HZ,
-                    "steps": 200,
+                    "steps": 12,
                     "stop_event": self._estop_active,
                 },
                 daemon=True,

@@ -29,9 +29,9 @@ Integer values are assumed to be ZED cameras with no role assigned.
 
 import json
 from pathlib import Path
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from raiden._config import CAMERA_CONFIG
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 if TYPE_CHECKING:
     from raiden.cameras.base import Camera
@@ -238,9 +238,9 @@ class CameraConfig:
         serials = list(detected.keys())
         suggested: Dict[str, Any] = {}
         roles = [
-            ("scene_1", "scene"),
-            ("right_wrist", "right_wrist"),
-            ("left_wrist", "left_wrist"),
+            ("scene_camera", "scene"),
+            ("right_wrist_camera", "right_wrist"),
+            ("left_wrist_camera", "left_wrist"),
         ]
         for i, serial in enumerate(serials):
             key, role = roles[i] if i < len(roles) else (f"camera_{i}", "scene")

@@ -51,16 +51,19 @@ import cv2
 import numpy as np
 from tqdm import tqdm
 
+from raiden._config import CAMERA_CONFIG
+from raiden.camera_config import CameraConfig
+
 _SEQUENCE_NAME = "0000"
 _JPG_QUALITY = 90
 
 # Cameras whose images are physically mounted upside-down and need a 180° correction.
 _FLIP_CAMERAS = {"right_wrist_camera"}
 
-# Wrist cameras: map camera name → robot_data key for the corresponding follower arm.
-_WRIST_CAMERA_JOINT_KEYS: Dict[str, str] = {
-    "left_wrist_camera": "follower_l_joint_pos",
-    "right_wrist_camera": "follower_r_joint_pos",
+# Camera role → robot_data joint key.
+_ROLE_TO_JOINT_KEY: Dict[str, str] = {
+    "left_wrist": "follower_l_joint_pos",
+    "right_wrist": "follower_r_joint_pos",
 }
 
 # Lazily-loaded kinematics instance (MuJoCo FK for YAM arm).
@@ -542,6 +545,7 @@ def _build_lowdim(
     flip_cameras: set,
     right_base_to_left_base: Optional[np.ndarray],
     cam_timestamps: Dict[str, Optional[np.ndarray]],
+    wrist_camera_joint_keys: Optional[Dict[str, str]] = None,
 ) -> None:
     """Write seq_dir/lowdim.npz with all cameras' intrinsics/extrinsics plus joints, action, language.
 
@@ -658,7 +662,7 @@ def _build_lowdim(
                     ).flatten()
 
         per_frame_ext: Optional[np.ndarray] = None
-        joint_key = _WRIST_CAMERA_JOINT_KEYS.get(name)
+        joint_key = (wrist_camera_joint_keys or {}).get(name)
         if (
             joint_key
             and he is not None
@@ -686,7 +690,7 @@ def _build_lowdim(
                 ).astype(np.float32)
                 if kin is None:
                     kin = _get_kinematics()
-                is_right = joint_key == "follower_r_joint_pos"
+                is_right = joint_key.startswith("follower_r")
                 per_frame_ext = np.stack(
                     [
                         (
@@ -1179,6 +1183,14 @@ def convert_recording(
 
     cameras = list(frame_counts.keys())
 
+    # ── wrist camera → joint key mapping from camera config roles ─────────
+    cam_cfg = CameraConfig(CAMERA_CONFIG)
+    wrist_camera_joint_keys: Dict[str, str] = {
+        name: _ROLE_TO_JOINT_KEY[role]
+        for name in cameras
+        if (role := cam_cfg.get_role(name)) in _ROLE_TO_JOINT_KEY
+    }
+
     # ── lowdim ────────────────────────────────────────────────────────────
     print("\nBuilding lowdim...")
     _build_lowdim(
@@ -1192,6 +1204,7 @@ def convert_recording(
         flip_cameras=_FLIP_CAMERAS,
         right_base_to_left_base=T_left_base_from_right_base,
         cam_timestamps=cam_timestamps,
+        wrist_camera_joint_keys=wrist_camera_joint_keys,
     )
     print(f"  ✓ lowdim/ ({n_min} frames)")
 

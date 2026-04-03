@@ -11,10 +11,8 @@ import numpy as np
 # Import kinematics from i2rt
 from i2rt.robots.kinematics import Kinematics
 
-from raiden._xml_paths import get_yam_4310_linear_xml_path as _get_combined_xml_path
-
 from raiden._config import CALIBRATION_FILE, CALIBRATION_POSES_FILE, CAMERA_CONFIG
-
+from raiden._xml_paths import get_yam_4310_linear_xml_path as _get_combined_xml_path
 from raiden.calibration.core import (
     CameraCalibrator,
     ChArUcoBoardConfig,
