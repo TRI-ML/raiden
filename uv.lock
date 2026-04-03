@@ -640,6 +640,22 @@ wheels = [
 ]
 
 [[package]]
+name = "iterfzf"
+version = "1.9.0.67.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/4c/5a/d955b2ee27ffc7bf48fcb99201e071a39bc68aaa3c3daf4fd4e487b7d21d/iterfzf-1.9.0.67.0.tar.gz", hash = "sha256:9e9ddeba324a6bf7786f6033d1ed5030c2b36bce86ef63f9e76ecb84529e45ac", size = 1971623, upload-time = "2026-01-25T05:30:08.671Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/58/65/a39b5616f37159e45bb0a022b6f33b1de7c828a2862f0a1bdf9a1c33a8ff/iterfzf-1.9.0.67.0-py3-none-macosx_10_7_x86_64.macosx_10_9_x86_64.whl", hash = "sha256:a2f75b362f7b99587cc18e4f38d77371399a27050aa2cc77fd2d62e5d815325a", size = 1865329, upload-time = "2026-01-25T05:29:54.765Z" },
+    { url = "https://files.pythonhosted.org/packages/c6/15/5bed29959f6230003ff8a476a903f273c94e46bb57ee70422d36729af49d/iterfzf-1.9.0.67.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:2463c2001f2e2b2bf7acb5104783da7a5dfe2421e78f56a1c1ee47c7aab297de", size = 1737408, upload-time = "2026-01-25T05:29:56.765Z" },
+    { url = "https://files.pythonhosted.org/packages/7d/d1/97c18aaefdcd7a1bb205900e1685d6de02e26c1dda7442f4c34e23837d25/iterfzf-1.9.0.67.0-py3-none-manylinux_1_2_aarch64.manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:34173f018b7607817dcdc08d26162d972f4296d1b205478118ce0d44e1bf955d", size = 1671242, upload-time = "2026-01-25T05:29:58.747Z" },
+    { url = "https://files.pythonhosted.org/packages/b3/04/be83ea9b5340e4f9f14fd8ef8a42ecb4eb99ef05366673c33b734920b510/iterfzf-1.9.0.67.0-py3-none-manylinux_1_2_x86_64.manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:f84da7c420a2c7f4601d0f1c2390b09e06d4981e8c40a8e6f990e83de9871c95", size = 1800844, upload-time = "2026-01-25T05:30:00.521Z" },
+    { url = "https://files.pythonhosted.org/packages/be/b1/cdb5fb4ae54918b51360a52d56cbe00a037a9735623aca931014e480f382/iterfzf-1.9.0.67.0-py3-none-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:4f0da141e49ef4e89f28dec367cc2e65f8bfd55c98bc5da27651127235b30dbd", size = 1679470, upload-time = "2026-01-25T05:30:02.535Z" },
+    { url = "https://files.pythonhosted.org/packages/a5/73/a76a5eee2de4a206f96053e282b6ee7434fab92aa55b729497d76ef8c4e9/iterfzf-1.9.0.67.0-py3-none-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:c46d6b1c2d372e4940399d1952c0616fbdffc82577bb0b524494051484681507", size = 1779013, upload-time = "2026-01-25T05:30:03.844Z" },
+    { url = "https://files.pythonhosted.org/packages/7c/ac/a64707d03e1d4e55401535461b9248c91e834b19d8233f40e870495dd54d/iterfzf-1.9.0.67.0-py3-none-win_amd64.whl", hash = "sha256:7b4ad3cc6a2e395970be81fb913840ff482b6d9938ecec605e4a6fce9db936fb", size = 1976494, upload-time = "2026-01-25T05:30:05.202Z" },
+    { url = "https://files.pythonhosted.org/packages/bf/5f/4ceb4486a4ab699624be2caa8cdebdfce463ae5906e5511ce52bbcc8621d/iterfzf-1.9.0.67.0-py3-none-win_arm64.whl", hash = "sha256:8ef635f31ae30926a15da944bc8236a31805b7944d06875039998f74b52012cf", size = 1816915, upload-time = "2026-01-25T05:30:06.73Z" },
+]
+
+[[package]]
 name = "jax"
 version = "0.9.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1908,6 +1924,7 @@ dependencies = [
     { name = "boto3" },
     { name = "chiral" },
     { name = "i2rt" },
+    { name = "iterfzf" },
     { name = "jax" },
     { name = "jaxlie" },
     { name = "mink" },
@@ -1974,6 +1991,7 @@ requires-dist = [
     { name = "boto3", specifier = ">=1.42.66" },
     { name = "chiral", git = "ssh://git@github.com/TRI-ML/chiral" },
     { name = "i2rt", directory = "third_party/i2rt" },
+    { name = "iterfzf", specifier = ">=1.4.0" },
     { name = "jax" },
     { name = "jaxlie" },
     { name = "kornia", marker = "extra == 'tri-stereo'", specifier = ">=0.7" },

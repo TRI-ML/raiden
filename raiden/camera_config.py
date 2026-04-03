@@ -33,6 +33,8 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from raiden._config import CAMERA_CONFIG
 
+_VALID_ROLES = {"scene", "left_wrist", "right_wrist"}
+
 if TYPE_CHECKING:
     from raiden.cameras.base import Camera
 
@@ -57,6 +59,7 @@ class CameraConfig:
         if self.config_file.exists():
             with open(self.config_file) as f:
                 self.cameras: Dict[str, Any] = json.load(f)
+            self._warn_invalid_roles()
         else:
             self.cameras = {}
             self._save()
@@ -68,6 +71,16 @@ class CameraConfig:
     def _save(self) -> None:
         with open(self.config_file, "w") as f:
             json.dump(self.cameras, f, indent=2)
+
+    def _warn_invalid_roles(self) -> None:
+        for name, entry in self.cameras.items():
+            if isinstance(entry, dict) and "role" in entry:
+                role = entry["role"]
+                if role not in _VALID_ROLES:
+                    raise ValueError(
+                        f"Camera '{name}' in {self.config_file} has invalid role "
+                        f"'{role}'. Valid roles: {sorted(_VALID_ROLES)}."
+                    )
 
     # ------------------------------------------------------------------
     # Lookup helpers
@@ -148,6 +161,11 @@ class CameraConfig:
             camera_type: 'zed' or 'realsense'.
             role: 'scene', 'left_wrist', or 'right_wrist'. Optional but recommended.
         """
+        if role is not None and role not in _VALID_ROLES:
+            raise ValueError(
+                f"Invalid role '{role}' for camera '{name}'. "
+                f"Valid roles: {sorted(_VALID_ROLES)}."
+            )
         entry: Dict[str, Any] = {"serial": serial, "type": camera_type}
         if role is not None:
             entry["role"] = role

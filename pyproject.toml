@@ -27,6 +27,7 @@ dependencies = [
   "tqdm>=4.64",
   "torch>=2.10.0",
   "textual>=8.1.1",
+  "iterfzf>=1.4.0",
   "pysondb>=1.6.1",
   "onnxscript>=0.6.2",
   "chiral",
