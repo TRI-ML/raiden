@@ -207,6 +207,7 @@ class RaidenPolicyServer(chiral.PolicyServer):
         action_type: str = "ee_pose",
         no_depth: bool = False,
         resize_images_size: Optional[Tuple[int, int]] = None,
+        visualize: bool = False,
     ):
         self._no_depth = no_depth
         self._resize = resize_images_size  # (H, W) or None
@@ -349,6 +350,9 @@ class RaidenPolicyServer(chiral.PolicyServer):
         # Set when an emergency stop fires; causes step() to reject new actions
         # immediately and smooth_move_joints threads to abort mid-interpolation.
         self._estop_active = threading.Event()
+
+        if visualize:
+            threading.Thread(target=self._rerun_loop, daemon=True).start()
 
         for name in self._raiden_cam_cfg.list_camera_names():
             threading.Thread(
@@ -1326,6 +1330,47 @@ class RaidenPolicyServer(chiral.PolicyServer):
             time.sleep(1 / 100)
 
     # -------------------------------------------------------------------------
+    # Rerun visualization
+    # -------------------------------------------------------------------------
+
+    def _rerun_loop(self) -> None:
+        """Stream camera images to a Rerun viewer at 30 FPS.
+
+        Uses the same image buffers filled by the camera capture loops, so
+        visualization adds no extra camera I/O.  Starts a gRPC + web server
+        so the viewer is accessible from a browser or via SSH tunnel.
+        """
+        import rerun as rr
+        from urllib.parse import quote
+
+        rr.init("raiden_server")
+        grpc_port = 9878
+        web_port = 9877
+        server_uri = rr.serve_grpc(grpc_port=grpc_port)
+        rr.serve_web_viewer(web_port=web_port, open_browser=False)
+        viewer_url = f"http://localhost:{web_port}?url={quote(server_uri, safe='')}"
+        print(f"\nRerun viewer:    {viewer_url}")
+        print(
+            f"SSH tunnel:      ssh -L {web_port}:localhost:{web_port}"
+            f" -L {grpc_port}:localhost:{grpc_port} <host>"
+        )
+
+        target_dt = 1.0 / 30.0
+        frame_idx = 0
+        while self._running:
+            loop_start = time.monotonic()
+            rr.set_time("frame", sequence=frame_idx)
+            for c in self._configs:
+                with self._locks[c.name]:
+                    img = self.images[c.name].copy()
+                rr.log(f"cameras/{c.name}", rr.Image(img))
+            frame_idx += 1
+            elapsed = time.monotonic() - loop_start
+            remaining = target_dt - elapsed
+            if remaining > 0:
+                time.sleep(remaining)
+
+    # -------------------------------------------------------------------------
     # Cleanup
     # -------------------------------------------------------------------------
 
@@ -1363,6 +1408,7 @@ def run_server(
     action_type: str = "ee_pose",
     no_depth: bool = False,
     resize_images_size: Optional[Tuple[int, int]] = (384, 384),
+    visualize: bool = False,
 ) -> None:
     """Start the Raiden chiral policy server."""
     from raiden._config import CALIBRATION_FILE, CAMERA_CONFIG
@@ -1380,6 +1426,7 @@ def run_server(
         action_type=action_type,
         no_depth=no_depth,
         resize_images_size=resize_images_size,
+        visualize=visualize,
     )
     try:
         server.run()

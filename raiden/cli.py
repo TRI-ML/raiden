@@ -365,6 +365,9 @@ class ServeCommand:
     resize_images: Optional[str] = "384x384"
     """Resize images to HxW before sending to the policy (default: '384x384'). Pass empty string to disable."""
 
+    visualize: bool = False
+    """Stream camera images to a Rerun web viewer at 30 FPS (accessible via browser or SSH tunnel)"""
+
     camera_config_file: str = ""
     """Path to camera.json (default: ~/.config/raiden/camera.json)"""
 
@@ -710,6 +713,7 @@ def main():
                 action_type=command.action_type,
                 no_depth=command.no_depth,
                 resize_images_size=resize,
+                visualize=command.visualize,
             )
 
         elif subcommand == "make_ffs_onnx":
