@@ -178,7 +178,7 @@ wheels = [
 [[package]]
 name = "chiral"
 version = "0.1.0"
-source = { git = "ssh://git@github.com/TRI-ML/chiral#c0b1387b2babfb44a9bfdf7144516425fdc5e012" }
+source = { git = "ssh://git@github.com/TRI-ML/chiral#f7293d7ddf2209da8d49922dddb2f1f1bc9b4454" }
 dependencies = [
     { name = "eclipse-zenoh" },
     { name = "msgpack" },

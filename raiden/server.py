@@ -37,6 +37,8 @@ the right-side-up orientation used by the training dataset.  The principal
 point in the intrinsics and the ``T_cam→ee`` rotation are corrected accordingly.
 """
 
+import asyncio
+import concurrent.futures
 import json
 import threading
 import time
@@ -337,6 +339,13 @@ class RaidenPolicyServer(chiral.PolicyServer):
         self._step_count = 0
         self._t_sum = 0.0
         self._running = True
+        # Executor for async smooth commands so policy inference overlaps motion.
+        self._smooth_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="smooth"
+        )
+        self._pending_smooth: Optional[concurrent.futures.Future] = None
+        # Last commanded joint positions — used as IK seed for the next step.
+        self._last_joint_cmd: Optional[np.ndarray] = None
         # Set when an emergency stop fires; causes step() to reject new actions
         # immediately and smooth_move_joints threads to abort mid-interpolation.
         self._estop_active = threading.Event()
@@ -559,9 +568,7 @@ class RaidenPolicyServer(chiral.PolicyServer):
 
     async def get_metadata(self) -> dict:
         action_shape = (
-            [1, BIMANUAL_EE_POSE_DOF]
-            if self._action_type == "ee_pose"
-            else [1, BIMANUAL_DOF]
+            [BIMANUAL_EE_POSE_DOF] if self._action_type == "ee_pose" else [BIMANUAL_DOF]
         )
         return {
             "cameras": self._raiden_cam_cfg.list_camera_names(),
@@ -576,44 +583,60 @@ class RaidenPolicyServer(chiral.PolicyServer):
         }
 
     async def reset(self) -> tuple[Observation, dict]:
+        # Wait for any in-flight smooth command before homing.
+        if self._pending_smooth is not None:
+            loop = asyncio.get_running_loop()
+            try:
+                await loop.run_in_executor(None, self._pending_smooth.result)
+            except Exception:
+                pass
+            self._pending_smooth = None
+        self._last_joint_cmd = None
         self._step_count = 0
         self._t_sum = 0.0
         self._robot.move_to_home_positions(simultaneous=True)
-        return self._make_obs(), {}
+        loop = asyncio.get_running_loop()
+        obs = await loop.run_in_executor(None, self._make_obs)
+        return obs, {}
 
-    async def step(
-        self, action: np.ndarray
-    ) -> tuple[Observation, float, bool, bool, dict]:
+    async def apply_action(self, action: np.ndarray) -> None:
+        """Fire-and-forget action application (chiral non-blocking API).
+
+        Called by the network thread at the client's inference rate.  Returns
+        immediately after queuing the smooth command — the client never waits
+        for execution to finish, and ``get_obs()`` is polled independently.
+        """
         if self._estop_active.is_set():
-            raise RuntimeError("Emergency stop active — rejecting policy step.")
+            return
 
         t0 = time.perf_counter()
+        loop = asyncio.get_running_loop()
 
-        # Accept (D,), (1, D), or (N, D).
-        # When N > 1, execute each step sequentially at _CONTROL_HZ.
-        action = np.asarray(action)
-        if action.ndim == 1:
-            action = action[None]  # (1, D)
+        action = np.asarray(action).reshape(-1)  # (D,)
 
-        for i, step_action in enumerate(action):
-            step_action = step_action.reshape(-1)
+        # Run IK in the executor so it doesn't block the event loop.
+        # Seeded from the last commanded target for stable convergence.
+        init_cmd = self._last_joint_cmd
+        if self._action_type == "ee_pose":
+            joint_cmd = await loop.run_in_executor(
+                None, self._ee_pose_to_joint_cmd, action, init_cmd
+            )
+        else:
+            joint_cmd = action
 
-            if self._action_type == "ee_pose":
-                joint_cmd = self._ee_pose_to_joint_cmd(step_action)
-            else:
-                joint_cmd = step_action
+        # Safety check: abort if any joint delta exceeds the threshold.
+        self._check_joint_delta(joint_cmd)
 
-            # Safety check: abort if any joint delta exceeds the threshold.
-            self._check_joint_delta(joint_cmd)
+        self._last_joint_cmd = joint_cmd
 
-            # Smoothly interpolate to the target over one control period.
-            # _smooth_command blocks for 1/_CONTROL_HZ seconds, so no extra sleep needed.
-            self._smooth_command(joint_cmd)
+        # Submit to the smooth executor.  max_workers=1 serialises commands:
+        # smooth_N completes before smooth_N+1 starts, so the robot always
+        # moves cleanly from one target to the next without abrupt stops.
+        print(joint_cmd)
+        self._pending_smooth = self._smooth_executor.submit(
+            self._smooth_command, joint_cmd
+        )
 
-        # Use the final joint_cmd for the safety check reference already done above.
-        # Reuse joint_cmd from the last iteration.
-
-        obs = self._make_obs(timestamp=self._step_count * 0.05)
         step_ms = (time.perf_counter() - t0) * 1e3
         self._step_count += 1
         self._t_sum += step_ms
@@ -621,11 +644,18 @@ class RaidenPolicyServer(chiral.PolicyServer):
         if self._step_count % 10 == 0:
             print(
                 f"step={self._step_count:4d}  "
-                f"step_ms={step_ms:5.2f}  "
+                f"ik_ms={step_ms:5.2f}  "
                 f"avg={self._t_sum / self._step_count:5.2f}ms"
             )
 
-        return obs, 0.0, False, False, {}
+    async def get_obs(self) -> Observation:
+        """Return the current observation without blocking the event loop.
+
+        Called independently by the client at its obs-polling rate (e.g. 30 Hz),
+        fully decoupled from action application.
+        """
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._make_obs)
 
     # -------------------------------------------------------------------------
     # Camera temporal alignment
@@ -721,7 +751,9 @@ class RaidenPolicyServer(chiral.PolicyServer):
     # EE pose → joint IK
     # -------------------------------------------------------------------------
 
-    def _ee_pose_to_joint_cmd(self, action: np.ndarray) -> np.ndarray:
+    def _ee_pose_to_joint_cmd(
+        self, action: np.ndarray, init_cmd: Optional[np.ndarray] = None
+    ) -> np.ndarray:
         """Convert a 20-D EE pose action to a 14-D joint command via IK.
 
         Action layout (matching vla_foundry action_fields concatenation order)::
@@ -748,10 +780,17 @@ class RaidenPolicyServer(chiral.PolicyServer):
         )
         r_grip = float(action[19]) if len(action) >= 20 else 0.0
 
-        # Seed IK from the current measured joint positions, padded to model nq.
+        # Seed IK from the last *commanded* joint positions so the solver starts
+        # from the target the robot is moving toward rather than the mid-motion
+        # measured position, which is less stable and may slow convergence.
+        # Falls back to proprioception on the very first step.
         nq = kin._configuration.model.nq
-        q_l_prop = self._read_proprio("follower_l_joint_pos")
-        q_r_prop = self._read_proprio("follower_r_joint_pos")
+        if init_cmd is not None:
+            q_l_prop: Optional[np.ndarray] = init_cmd[:DOF]
+            q_r_prop: Optional[np.ndarray] = init_cmd[DOF : DOF * 2]
+        else:
+            q_l_prop = self._read_proprio("follower_l_joint_pos")
+            q_r_prop = self._read_proprio("follower_r_joint_pos")
 
         def _pad_init(q7: Optional[np.ndarray]) -> Optional[np.ndarray]:
             if q7 is None:
@@ -793,7 +832,7 @@ class RaidenPolicyServer(chiral.PolicyServer):
                 args=(self._robot.follower_l, joint_cmd[:DOF]),
                 kwargs={
                     "time_interval_s": 1.0 / _CONTROL_HZ,
-                    "steps": 12,
+                    "steps": 100,
                     "stop_event": self._estop_active,
                 },
                 daemon=True,
@@ -805,7 +844,7 @@ class RaidenPolicyServer(chiral.PolicyServer):
                 args=(self._robot.follower_r, joint_cmd[DOF : DOF * 2]),
                 kwargs={
                     "time_interval_s": 1.0 / _CONTROL_HZ,
-                    "steps": 12,
+                    "steps": 100,
                     "stop_event": self._estop_active,
                 },
                 daemon=True,
@@ -886,18 +925,26 @@ class RaidenPolicyServer(chiral.PolicyServer):
 
         cameras: list[CameraInfo] = []
         for c in self._configs:
+            # Compute FK-based extrinsics outside the lock (CPU work, no shared state).
+            extrinsics = self._compute_extrinsics(c.name, q_r, q_l)
+
+            # Atomically update extrinsics and snapshot image/depth/intrinsics under
+            # the same per-camera lock — mirrors chiral.PolicyServer._make_obs().
             with self._locks[c.name]:
+                np.copyto(self.extrinsics[c.name], extrinsics)
                 image = self.images[c.name].copy()
                 depth = self.depths[c.name].copy() if c.name in self.depths else None
+                intrinsics = self.intrinsics[c.name].copy()
+                cam_ts = self._image_timestamps[c.name]
 
-            extrinsics = self._compute_extrinsics(c.name, q_r, q_l)
             cameras.append(
                 CameraInfo(
                     name=c.name,
-                    intrinsics=c.intrinsics,
+                    intrinsics=intrinsics,
                     extrinsics=extrinsics,
                     image=image,
                     depth=depth,
+                    timestamp=cam_ts,
                 )
             )
 
@@ -1275,6 +1322,7 @@ class RaidenPolicyServer(chiral.PolicyServer):
     def close(self) -> None:
         """Stop capture threads and release cameras and robot connections."""
         self._running = False
+        self._smooth_executor.shutdown(wait=False)
         time.sleep(0.1)
         self._robot.shutdown()
         for handle in self._cam_handles.values():

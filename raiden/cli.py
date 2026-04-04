@@ -772,8 +772,12 @@ def main():
             feature_runner = TrtFeatureRunner(model).cuda().eval()
             post_runner = TrtPostRunner(model).cuda().eval()
 
-            left_img = torch.randn(1, 3, command.height, command.width).cuda().float() * 255
-            right_img = torch.randn(1, 3, command.height, command.width).cuda().float() * 255
+            left_img = (
+                torch.randn(1, 3, command.height, command.width).cuda().float() * 255
+            )
+            right_img = (
+                torch.randn(1, 3, command.height, command.width).cuda().float() * 255
+            )
 
             feature_onnx_path = save_path / "feature_runner.onnx"
             print("\nExporting feature_runner.onnx ...")
@@ -881,7 +885,9 @@ def main():
                     with open(engine_path, "wb") as f:
                         f.write(engine_bytes)
                     print(f"  Saved {engine_path}")
-                print("\nTensorRT engines ready. rd convert will use them automatically.")
+                print(
+                    "\nTensorRT engines ready. rd convert will use them automatically."
+                )
 
         elif subcommand == "make_tri_stereo_engine":
             sys.argv.pop(1)
@@ -892,9 +898,19 @@ def main():
             import tensorrt as trt  # noqa: PLC0415
             from pathlib import Path as _Path  # noqa: PLC0415
 
-            _tri_stereo_weights = _Path(__file__).parent.parent / "weights" / "tri_stereo"
-            onnx_path = _Path(command.onnx) if command.onnx else _tri_stereo_weights / f"stereo_{command.variant}.onnx"
-            engine_path = _Path(command.engine) if command.engine else _tri_stereo_weights / f"stereo_{command.variant}.engine"
+            _tri_stereo_weights = (
+                _Path(__file__).parent.parent / "weights" / "tri_stereo"
+            )
+            onnx_path = (
+                _Path(command.onnx)
+                if command.onnx
+                else _tri_stereo_weights / f"stereo_{command.variant}.onnx"
+            )
+            engine_path = (
+                _Path(command.engine)
+                if command.engine
+                else _tri_stereo_weights / f"stereo_{command.variant}.engine"
+            )
 
             if not onnx_path.exists():
                 print(f"ONNX model not found: {onnx_path}")
