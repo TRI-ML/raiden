@@ -627,14 +627,14 @@ class RaidenPolicyServer(chiral.PolicyServer):
         # Safety check: abort if any joint delta exceeds the threshold.
         self._check_joint_delta(joint_cmd)
 
+        prev_cmd = self._last_joint_cmd
         self._last_joint_cmd = joint_cmd
 
         # Submit to the smooth executor.  max_workers=1 serialises commands:
         # smooth_N completes before smooth_N+1 starts, so the robot always
         # moves cleanly from one target to the next without abrupt stops.
-        print(joint_cmd)
         self._pending_smooth = self._smooth_executor.submit(
-            self._smooth_command, joint_cmd
+            self._smooth_command, prev_cmd, joint_cmd
         )
 
         step_ms = (time.perf_counter() - t0) * 1e3
@@ -816,21 +816,30 @@ class RaidenPolicyServer(chiral.PolicyServer):
     # Smooth joint command
     # -------------------------------------------------------------------------
 
-    def _smooth_command(self, joint_cmd: np.ndarray) -> None:
-        """Send a joint command smoothly over one control period (1 / _CONTROL_HZ).
+    def _smooth_command(
+        self, prev_cmd: Optional[np.ndarray], joint_cmd: np.ndarray
+    ) -> None:
+        """Interpolate from prev_cmd to joint_cmd over one control period.
 
-        Both arms are interpolated in parallel threads so neither blocks the other.
+        Both arms run in parallel threads so neither blocks the other.
+        Interpolates between the previous and current *commanded* targets
+        (not actual positions) to reproduce the same trajectory shape as the
+        training data.
 
         Args:
-            joint_cmd: (14,) float32 — left arm (7) then right arm (7),
-                where each 7-D slice is [arm_joints(6), gripper(1)].
+            prev_cmd: Previous commanded joint positions (14,).  ``None`` on the
+                first step — falls back to reading the actual robot position.
+            joint_cmd: (14,) float32 — left arm (7) then right arm (7).
         """
+        start_l = prev_cmd[:DOF] if prev_cmd is not None else None
+        start_r = prev_cmd[DOF : DOF * 2] if prev_cmd is not None else None
         threads = []
         if self._robot.follower_l:
             t = threading.Thread(
                 target=smooth_move_joints,
                 args=(self._robot.follower_l, joint_cmd[:DOF]),
                 kwargs={
+                    "start_joint_positions": start_l,
                     "time_interval_s": 1.0 / _CONTROL_HZ,
                     "steps": 100,
                     "stop_event": self._estop_active,
@@ -843,6 +852,7 @@ class RaidenPolicyServer(chiral.PolicyServer):
                 target=smooth_move_joints,
                 args=(self._robot.follower_r, joint_cmd[DOF : DOF * 2]),
                 kwargs={
+                    "start_joint_positions": start_r,
                     "time_interval_s": 1.0 / _CONTROL_HZ,
                     "steps": 100,
                     "stop_event": self._estop_active,

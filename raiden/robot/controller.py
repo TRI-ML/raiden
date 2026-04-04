@@ -191,12 +191,23 @@ class YAMLeaderRobot:
 def smooth_move_joints(
     robot: Robot,
     target_joint_positions: np.ndarray,
+    start_joint_positions: Optional[np.ndarray] = None,
     time_interval_s: float = 5.0,
     steps: int = 200,
     stop_event: Optional[threading.Event] = None,
 ) -> None:
-    """Move the robot to target joint positions with smooth interpolation."""
-    current_pos = robot.get_joint_pos()
+    """Move the robot to target joint positions with smooth interpolation.
+
+    Args:
+        start_joint_positions: Starting configuration for the interpolation.
+            Pass the previous *commanded* target (not the measured position) so
+            the trajectory matches what was executed during data collection.
+            Falls back to ``robot.get_joint_pos()`` when ``None`` (e.g. first step).
+    """
+    if start_joint_positions is not None:
+        current_pos = np.asarray(start_joint_positions, dtype=np.float64)
+    else:
+        current_pos = robot.get_joint_pos()
     assert len(current_pos) == len(target_joint_positions)
 
     for i in range(steps + 1):
