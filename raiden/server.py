@@ -103,19 +103,29 @@ _DEFAULT_MAX_JOINT_DELTA = 0.2  # radians
 
 _CONTROL_HZ = 10.0
 
-# Lazily-loaded MuJoCo kinematics instance (shared across calls).
-_kinematics: Any = None
+# Thread-local MuJoCo kinematics instances.
+#
+# Kinematics.fk() and Kinematics.ik() both call
+# self._configuration.update(q) which modifies the mink.Configuration
+# in-place.  Using a single global instance causes FK in _make_obs() to
+# race with IK in _ee_pose_to_joint_cmd() when the asyncio event-loop
+# submits both to the thread-pool executor concurrently, corrupting the
+# configuration and returning wrong poses / joint solutions.
+#
+# Using threading.local() gives every worker thread its own Kinematics
+# object, eliminating all cross-thread state.
+_kin_tls: threading.local = threading.local()
 
 
 def _get_kinematics() -> Any:
-    global _kinematics
-    if _kinematics is None:
+    """Return the calling thread's Kinematics instance (created on first use)."""
+    if not hasattr(_kin_tls, "kinematics"):
         from i2rt.robots.kinematics import Kinematics
 
         from raiden._xml_paths import get_yam_4310_linear_xml_path
 
-        _kinematics = Kinematics(get_yam_4310_linear_xml_path(), "grasp_site")
-    return _kinematics
+        _kin_tls.kinematics = Kinematics(get_yam_4310_linear_xml_path(), "grasp_site")
+    return _kin_tls.kinematics
 
 
 def _rot6d_to_mat(v: np.ndarray) -> np.ndarray:
@@ -845,7 +855,7 @@ class RaidenPolicyServer(chiral.PolicyServer):
                 kwargs={
                     "start_joint_positions": start_l,
                     "time_interval_s": 1.0 / _CONTROL_HZ,
-                    "steps": 100,
+                    "steps": 15,
                     "stop_event": self._estop_active,
                 },
                 daemon=True,
@@ -858,7 +868,7 @@ class RaidenPolicyServer(chiral.PolicyServer):
                 kwargs={
                     "start_joint_positions": start_r,
                     "time_interval_s": 1.0 / _CONTROL_HZ,
-                    "steps": 100,
+                    "steps": 15,
                     "stop_event": self._estop_active,
                 },
                 daemon=True,
@@ -1340,8 +1350,9 @@ class RaidenPolicyServer(chiral.PolicyServer):
         visualization adds no extra camera I/O.  Starts a gRPC + web server
         so the viewer is accessible from a browser or via SSH tunnel.
         """
-        import rerun as rr
         from urllib.parse import quote
+
+        import rerun as rr
 
         rr.init("raiden_server")
         grpc_port = 9878

@@ -155,6 +155,14 @@ def _get_kinematics() -> Kinematics:
     return Kinematics(get_yam_4310_linear_xml_path(), "grasp_site")
 
 
+def _fk_ee_xyz(kin: Kinematics, q6: np.ndarray) -> np.ndarray:
+    """Return (3,) EE position from 6-DOF arm joints."""
+    nq = kin._configuration.model.nq
+    q = np.zeros(nq, dtype=np.float64)
+    q[:6] = q6
+    return kin.fk(q)[:3, 3].astype(np.float32)
+
+
 def _ik_6dof(
     kin: Kinematics, target_pose: np.ndarray, init_q: np.ndarray
 ) -> Tuple[bool, np.ndarray]:
@@ -251,6 +259,8 @@ def run_replay(
     speed: float = 1.0,
     control_hz: int = 150,
     camera_hz: int = 30,
+    stride: int = 1,
+    visualize: bool = False,
 ) -> None:
     """Replay a recorded episode.
 
@@ -267,9 +277,11 @@ def run_replay(
         control_hz: Command rate for streaming (default 150 Hz).
         camera_hz: Frame rate of the lowdim action sequence (default 30 Hz,
             processed source only).
+        stride: Subsample every N-th frame to match the shardify stride
+            (default 1 = native rate, 3 = 10 Hz from 30 Hz recordings).
     """
     if (recording_dir / "robot_data.npz").exists():
-        _run_raw_replay(recording_dir, arms=arms, speed=speed, control_hz=control_hz)
+        _run_raw_replay(recording_dir, arms=arms, speed=speed, control_hz=control_hz, stride=stride, visualize=visualize)
     elif (recording_dir / "lowdim").exists():
         _run_processed_replay(
             recording_dir,
@@ -277,6 +289,8 @@ def run_replay(
             speed=speed,
             control_hz=control_hz,
             camera_hz=camera_hz,
+            stride=stride,
+            visualize=visualize,
         )
     else:
         raise FileNotFoundError(
@@ -289,10 +303,17 @@ def _run_raw_replay(
     arms: str = "bimanual",
     speed: float = 1.0,
     control_hz: int = 150,
+    stride: int = 1,
+    visualize: bool = False,
 ) -> None:
     """Replay directly from raw joint commands in robot_data.npz (no IK)."""
     joints_l, joints_r, timestamps = _load_raw_joints(recording_dir)
     use_right = arms == "bimanual" and joints_r is not None
+
+    if stride > 1:
+        joints_l = joints_l[::stride]
+        joints_r = joints_r[::stride] if joints_r is not None else None
+        timestamps = timestamps[::stride]
 
     traj_l = _resample_joints(joints_l, timestamps, control_hz)
     traj_r = _resample_joints(joints_r, timestamps, control_hz) if use_right else None
@@ -300,7 +321,7 @@ def _run_raw_replay(
     n_frames = len(traj_l)
     duration_s = (timestamps[-1] - timestamps[0]) / 1e9
     print(f"Recording : {recording_dir.name}  (raw)")
-    print(f"Samples   : {len(joints_l)}  ({duration_s:.1f} s)")
+    print(f"Samples   : {len(joints_l)}  ({duration_s:.1f} s, stride={stride})")
     print(f"Control Hz: {control_hz} Hz  ({n_frames} frames after resample)")
     print(f"Arms      : {arms}")
     print(f"Speed     : {speed}x")
@@ -311,6 +332,7 @@ def _run_raw_replay(
         use_right=use_right,
         speed=speed,
         control_hz=control_hz,
+        visualize=visualize,
     )
 
 
@@ -320,16 +342,21 @@ def _run_processed_replay(
     speed: float = 1.0,
     control_hz: int = 150,
     camera_hz: int = 30,
+    stride: int = 1,
+    visualize: bool = False,
 ) -> None:
     """Replay from processed lowdim pkl files using IK from EE poses."""
     use_right = arms == "bimanual"
 
     actions = _load_action_sequence(recording_dir)
+    if stride > 1:
+        actions = actions[::stride]
+    effective_hz = camera_hz // stride
     n_keys = len(actions)
-    duration_s = n_keys / camera_hz
+    duration_s = n_keys / effective_hz
     print(f"Recording : {recording_dir.name}  (processed, IK)")
-    print(f"Keyframes : {n_keys}  ({duration_s:.1f} s at {camera_hz} fps)")
-    print(f"Control Hz: {control_hz} Hz  (upsample ×{control_hz // camera_hz})")
+    print(f"Keyframes : {n_keys}  ({duration_s:.1f} s at {effective_hz} fps, stride={stride})")
+    print(f"Control Hz: {control_hz} Hz  (upsample ×{control_hz // effective_hz})")
     print(f"Arms      : {arms}")
     print(f"Speed     : {speed}x")
 
@@ -357,7 +384,7 @@ def _run_processed_replay(
             robot_l_init=robot_l_init,
             robot_r_init=robot_r_init,
             control_hz=control_hz,
-            camera_hz=camera_hz,
+            camera_hz=effective_hz,
         )
 
         _stream_trajectories(
@@ -367,6 +394,7 @@ def _run_processed_replay(
             speed=speed,
             control_hz=control_hz,
             robot=robot,
+            visualize=visualize,
         )
     except KeyboardInterrupt:
         print("\nReplay interrupted.")
@@ -383,6 +411,7 @@ def _stream_trajectories(
     control_hz: int,
     recording_dir: Optional[Path] = None,
     robot: Optional["RobotController"] = None,
+    visualize: bool = False,
 ) -> None:
     """Connect to (or reuse) the robot, move to start, then stream joint trajectories.
 
@@ -398,6 +427,31 @@ def _stream_trajectories(
             use_left_leader=False,
         )
         robot.initialize_robots()
+
+    # ── Rerun setup ────────────────────────────────────────────────────────
+    rr_kin = None
+    cmd_pts_l: list = []
+    cmd_pts_r: list = []
+    act_pts_l: list = []
+    act_pts_r: list = []
+    log_every = max(1, control_hz // 30)  # downsample to ~30 Hz for Rerun
+
+    if visualize:
+        import rerun as rr
+        from urllib.parse import quote
+
+        rr.init("raiden_replay")
+        grpc_port = 9878
+        web_port = 9877
+        server_uri = rr.serve_grpc(grpc_port=grpc_port)
+        rr.serve_web_viewer(web_port=web_port, open_browser=False)
+        viewer_url = f"http://localhost:{web_port}?url={quote(server_uri, safe='')}"
+        print(f"\nRerun viewer:  {viewer_url}")
+        print(
+            f"SSH tunnel:    ssh -L {web_port}:localhost:{web_port}"
+            f" -L {grpc_port}:localhost:{grpc_port} <host>\n"
+        )
+        rr_kin = _get_kinematics()
 
     n_frames = len(traj_l)
     try:
@@ -440,6 +494,26 @@ def _stream_trajectories(
                 robot.follower_l.command_joint_pos(traj_l[i])
             if use_right and robot.follower_r is not None and traj_r is not None:
                 robot.follower_r.command_joint_pos(traj_r[i])
+
+            if visualize and rr_kin is not None and i % log_every == 0:
+                import rerun as rr
+
+                rr.set_time("frame", sequence=i)
+
+                cmd_pts_l.append(_fk_ee_xyz(rr_kin, traj_l[i, :6]))
+                rr.log("trajectory/commanded/left", rr.LineStrips3D([cmd_pts_l], colors=[[0, 220, 0]]))
+
+                if use_right and traj_r is not None:
+                    cmd_pts_r.append(_fk_ee_xyz(rr_kin, traj_r[i, :6]))
+                    rr.log("trajectory/commanded/right", rr.LineStrips3D([cmd_pts_r], colors=[[0, 120, 255]]))
+
+                if robot is not None:
+                    if robot.follower_l is not None:
+                        act_pts_l.append(_fk_ee_xyz(rr_kin, robot.follower_l.get_joint_pos()[:6]))
+                        rr.log("trajectory/actual/left", rr.LineStrips3D([act_pts_l], colors=[[255, 80, 0]]))
+                    if use_right and robot.follower_r is not None:
+                        act_pts_r.append(_fk_ee_xyz(rr_kin, robot.follower_r.get_joint_pos()[:6]))
+                        rr.log("trajectory/actual/right", rr.LineStrips3D([act_pts_r], colors=[[255, 0, 150]]))
 
             if i % 150 == 0:
                 elapsed = time.monotonic() - t_start

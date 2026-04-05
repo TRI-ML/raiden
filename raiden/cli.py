@@ -248,6 +248,12 @@ class ReplayCommand:
     speed: float = 1.0
     """Playback speed multiplier (default: 1.0 = real-time, 0.5 = half speed)"""
 
+    stride: int = 1
+    """Subsample every N-th frame to match shardify stride (default: 1 = native rate, 3 = 10 Hz from 30 Hz recordings)"""
+
+    visualize: bool = False
+    """Stream commanded and actual EE trajectories to a Rerun web viewer"""
+
     source: Literal["raw", "processed"] = "raw"
     """Data source: 'raw' loads joint commands directly from robot_data.npz (no IK); 'processed' loads EE poses from lowdim pkls and solves IK"""
 
@@ -484,7 +490,7 @@ def main():
                 recording_dir = select_processed_recording()
             else:
                 recording_dir = select_recording()
-            run_replay(recording_dir, arms=command.arms, speed=command.speed)
+            run_replay(recording_dir, arms=command.arms, speed=command.speed, stride=command.stride, visualize=command.visualize)
 
         elif subcommand == "list_devices":
             sys.argv.pop(1)
