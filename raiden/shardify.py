@@ -30,6 +30,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 from PIL import Image
+from tqdm import tqdm
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -70,6 +71,7 @@ class ShardifyConfig:
     #: Resize images to (H, W) before storing.  None = no resize.
     resize_images_size: Optional[Tuple[int, int]] = None
     jpeg_quality: int = 95
+    use_depth: bool = False
 
     # Sample filtering
     filter_still_samples: bool = False
@@ -799,15 +801,20 @@ def run_shardify(
     stats_counter = 0
 
     # ── Phase 1: load all episodes ────────────────────────────────────────
+    print(f"Loading {len(eps)} episode(s)...")
     ep_contexts: List[dict] = []
-    for ep_dir in eps:
+    skipped = 0
+    total_frames = 0
+    for i, ep_dir in enumerate(eps, 1):
         if not (ep_dir / "metadata.json").exists():
-            print(f"  Skipping {ep_dir.name}: no metadata.json")
+            print(f"  [{i}/{len(eps)}] SKIP {ep_dir.name}: no metadata.json")
+            skipped += 1
             continue
         try:
             frames = _load_episode_frames(ep_dir)
         except FileNotFoundError as e:
-            print(f"  Skipping {ep_dir.name}: {e}")
+            print(f"  [{i}/{len(eps)}] SKIP {ep_dir.name}: {e}")
+            skipped += 1
             continue
         anchor_frame = frames[0]
         with open(ep_dir / "metadata.json") as _mf:
@@ -827,7 +834,10 @@ def run_shardify(
                 "control": _ep_meta.get("control", "leader"),
             }
         )
-        print(f"  Loaded {ep_dir.name}: {len(frames)} frames")
+        total_frames += len(frames)
+        print(f"  [{i}/{len(eps)}] {ep_dir.name}  ({len(frames)} frames)")
+    skip_msg = f", {skipped} skipped" if skipped else ""
+    print(f"Loaded {len(ep_contexts)} episodes{skip_msg}, {total_frames} frames total\n")
 
     # ── Phase 2: global shuffle across all episodes ───────────────────────
     all_work: List[tuple] = [
@@ -835,11 +845,13 @@ def run_shardify(
     ]
     random.shuffle(all_work)
     print(
-        f"\n  {len(all_work)} total anchors from {len(ep_contexts)} episodes — processing in globally shuffled order\n"
+        f"Processing {len(all_work)} anchors from {len(ep_contexts)} episodes "
+        f"(globally shuffled, stride={config.stride})..."
     )
 
     ep_sample_counts: Dict[str, int] = {}
-    for ctx, t in all_work:
+    pbar = tqdm(all_work, unit="anchor", dynamic_ncols=True)
+    for ctx, t in pbar:
         ep_dir = ctx["ep_dir"]
         frames = ctx["frames"]
         n_frames = ctx["n_frames"]
@@ -920,9 +932,10 @@ def run_shardify(
                 )
                 if rgb is not None:
                     sample_files[f"{sample_uuid}.{out_cam}_{suffix}.jpg"] = rgb
-                depth = _load_depth_png(ep_dir, src_cam, abs_frame)
-                if depth is not None:
-                    sample_files[f"{sample_uuid}.{out_cam}_{suffix}.depth.png"] = depth
+                if config.use_depth:
+                    depth = _load_depth_png(ep_dir, src_cam, abs_frame)
+                    if depth is not None:
+                        sample_files[f"{sample_uuid}.{out_cam}_{suffix}.depth.png"] = depth
 
         # ── serialize lowdim ─────────────────────────────────────────
         buf = io.BytesIO()
@@ -958,6 +971,10 @@ def run_shardify(
         total_samples += 1
         ep_sample_counts[episode_id] = ep_sample_counts.get(episode_id, 0) + 1
         stats_counter += 1
+        pbar.set_postfix(
+            filtered=filtered_padding + filtered_still + filtered_nan,
+            shard=writer._shard_idx,
+        )
 
         # ── accumulate stats (every stats_stride samples) ─────────────
         if stats_counter % config.stats_stride == 0:
@@ -976,11 +993,11 @@ def run_shardify(
                     )
                 stats_accumulators[key].update(sample_arr)
 
-        if total_samples % 500 == 0:
-            print(f"  {total_samples} samples written...", end="\r")
+    pbar.close()
 
+    print("\nSamples per episode:")
     for ep_id, count in sorted(ep_sample_counts.items()):
-        print(f"  {ep_id}: {count} samples")
+        print(f"  {ep_id}: {count}")
 
     writer.close()
 
@@ -988,7 +1005,7 @@ def run_shardify(
     (shard_dir / "manifest.jsonl").write_text("\n".join(writer.manifest_lines()) + "\n")
 
     # ── compute and write stats.json ─────────────────────────────────────
-    print("Computing statistics...")
+    print("\nComputing statistics...")
     stats: Dict[str, Any] = {
         key: acc.finalize() for key, acc in stats_accumulators.items()
     }
@@ -997,8 +1014,8 @@ def run_shardify(
         mn = s.get("min", [])
         mx = s.get("max", [])
         same = mn == mx if isinstance(mn, list) else False
-        flag = "  *** min==max!" if same else ""
-        print(f"  stats {key}: count={count}, min={mn}, max={mx}{flag}")
+        flag = "  [!] min==max" if same else ""
+        print(f"  {key}: n={count}{flag}")
     with open(shard_dir / "stats.json", "w") as f:
         json.dump(stats, f)
 
@@ -1031,9 +1048,10 @@ def run_shardify(
         json.dump(proc_meta, f, indent=2)
 
     print(
-        f"\nDone.  {total_samples} samples → {writer._shard_idx} shards  "
-        f"(filtered: {filtered_padding} padding, {filtered_still} still, {filtered_nan} nan)  "
-        f"{elapsed:.0f}s"
+        f"\nDone: {total_samples} samples → {writer._shard_idx} shards  "
+        f"filtered: {filtered_padding + filtered_still + filtered_nan} "
+        f"(pad={filtered_padding} still={filtered_still} nan={filtered_nan})  "
+        f"elapsed: {elapsed:.0f}s"
     )
     print(f"Output: {shard_dir}")
 

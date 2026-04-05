@@ -336,6 +336,9 @@ class ShardifyCommand:
     num_workers: int = 1
     """Number of worker processes (default: 1)"""
 
+    use_depth: bool = False
+    """Include depth images (.depth.png) in shards (default: False)"""
+
 
 @dataclass
 class ServeCommand:
@@ -632,6 +635,7 @@ def main():
                     max_episodes_to_process=command.max_episodes,
                     num_workers=command.num_workers,
                     stats_stride=command.stats_stride,
+                    use_depth=command.use_depth,
                 )
                 run_shardify(
                     episode_dirs,
