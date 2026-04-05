@@ -281,7 +281,14 @@ def run_replay(
             (default 1 = native rate, 3 = 10 Hz from 30 Hz recordings).
     """
     if (recording_dir / "robot_data.npz").exists():
-        _run_raw_replay(recording_dir, arms=arms, speed=speed, control_hz=control_hz, stride=stride, visualize=visualize)
+        _run_raw_replay(
+            recording_dir,
+            arms=arms,
+            speed=speed,
+            control_hz=control_hz,
+            stride=stride,
+            visualize=visualize,
+        )
     elif (recording_dir / "lowdim").exists():
         _run_processed_replay(
             recording_dir,
@@ -355,7 +362,9 @@ def _run_processed_replay(
     n_keys = len(actions)
     duration_s = n_keys / effective_hz
     print(f"Recording : {recording_dir.name}  (processed, IK)")
-    print(f"Keyframes : {n_keys}  ({duration_s:.1f} s at {effective_hz} fps, stride={stride})")
+    print(
+        f"Keyframes : {n_keys}  ({duration_s:.1f} s at {effective_hz} fps, stride={stride})"
+    )
     print(f"Control Hz: {control_hz} Hz  (upsample ×{control_hz // effective_hz})")
     print(f"Arms      : {arms}")
     print(f"Speed     : {speed}x")
@@ -501,19 +510,35 @@ def _stream_trajectories(
                 rr.set_time("frame", sequence=i)
 
                 cmd_pts_l.append(_fk_ee_xyz(rr_kin, traj_l[i, :6]))
-                rr.log("trajectory/commanded/left", rr.LineStrips3D([cmd_pts_l], colors=[[0, 220, 0]]))
+                rr.log(
+                    "trajectory/commanded/left",
+                    rr.LineStrips3D([cmd_pts_l], colors=[[0, 220, 0]]),
+                )
 
                 if use_right and traj_r is not None:
                     cmd_pts_r.append(_fk_ee_xyz(rr_kin, traj_r[i, :6]))
-                    rr.log("trajectory/commanded/right", rr.LineStrips3D([cmd_pts_r], colors=[[0, 120, 255]]))
+                    rr.log(
+                        "trajectory/commanded/right",
+                        rr.LineStrips3D([cmd_pts_r], colors=[[0, 120, 255]]),
+                    )
 
                 if robot is not None:
                     if robot.follower_l is not None:
-                        act_pts_l.append(_fk_ee_xyz(rr_kin, robot.follower_l.get_joint_pos()[:6]))
-                        rr.log("trajectory/actual/left", rr.LineStrips3D([act_pts_l], colors=[[255, 80, 0]]))
+                        act_pts_l.append(
+                            _fk_ee_xyz(rr_kin, robot.follower_l.get_joint_pos()[:6])
+                        )
+                        rr.log(
+                            "trajectory/actual/left",
+                            rr.LineStrips3D([act_pts_l], colors=[[255, 80, 0]]),
+                        )
                     if use_right and robot.follower_r is not None:
-                        act_pts_r.append(_fk_ee_xyz(rr_kin, robot.follower_r.get_joint_pos()[:6]))
-                        rr.log("trajectory/actual/right", rr.LineStrips3D([act_pts_r], colors=[[255, 0, 150]]))
+                        act_pts_r.append(
+                            _fk_ee_xyz(rr_kin, robot.follower_r.get_joint_pos()[:6])
+                        )
+                        rr.log(
+                            "trajectory/actual/right",
+                            rr.LineStrips3D([act_pts_r], colors=[[255, 0, 150]]),
+                        )
 
             if i % 150 == 0:
                 elapsed = time.monotonic() - t_start

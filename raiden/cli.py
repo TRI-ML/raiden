@@ -490,7 +490,13 @@ def main():
                 recording_dir = select_processed_recording()
             else:
                 recording_dir = select_recording()
-            run_replay(recording_dir, arms=command.arms, speed=command.speed, stride=command.stride, visualize=command.visualize)
+            run_replay(
+                recording_dir,
+                arms=command.arms,
+                speed=command.speed,
+                stride=command.stride,
+                visualize=command.visualize,
+            )
 
         elif subcommand == "list_devices":
             sys.argv.pop(1)
