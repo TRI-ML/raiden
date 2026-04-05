@@ -31,6 +31,7 @@ dependencies = [
   "pysondb>=1.6.1",
   "onnxscript>=0.6.2",
   "chiral",
+  "pyyaml>=6.0.3",
 ]
 
 [project.optional-dependencies]
