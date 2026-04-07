@@ -5,7 +5,7 @@ import signal
 import sys
 import time
 
-from raiden.control import TeleopInterface, YAMInterface, build_interface
+from raiden.control import TeleopInterface, build_interface
 from raiden.robot.controller import RobotController
 
 

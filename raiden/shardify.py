@@ -837,7 +837,9 @@ def run_shardify(
         total_frames += len(frames)
         print(f"  [{i}/{len(eps)}] {ep_dir.name}  ({len(frames)} frames)")
     skip_msg = f", {skipped} skipped" if skipped else ""
-    print(f"Loaded {len(ep_contexts)} episodes{skip_msg}, {total_frames} frames total\n")
+    print(
+        f"Loaded {len(ep_contexts)} episodes{skip_msg}, {total_frames} frames total\n"
+    )
 
     # ── Phase 2: global shuffle across all episodes ───────────────────────
     all_work: List[tuple] = [
@@ -935,7 +937,9 @@ def run_shardify(
                 if config.use_depth:
                     depth = _load_depth_png(ep_dir, src_cam, abs_frame)
                     if depth is not None:
-                        sample_files[f"{sample_uuid}.{out_cam}_{suffix}.depth.png"] = depth
+                        sample_files[f"{sample_uuid}.{out_cam}_{suffix}.depth.png"] = (
+                            depth
+                        )
 
         # ── serialize lowdim ─────────────────────────────────────────
         buf = io.BytesIO()

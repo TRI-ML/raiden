@@ -3,7 +3,12 @@
 import threading
 
 from raiden.control.base import TeleopInterface
-from raiden.robot.footpedal import PEDAL_LEFT, PEDAL_MIDDLE, PEDAL_RIGHT, try_open_footpedal
+from raiden.robot.footpedal import (
+    PEDAL_LEFT,
+    PEDAL_MIDDLE,
+    PEDAL_RIGHT,
+    try_open_footpedal,
+)
 
 
 class SpaceMouseInterface(TeleopInterface):
@@ -37,6 +42,7 @@ class SpaceMouseInterface(TeleopInterface):
         self._pedal_failure = threading.Event()
         self._footpedal = try_open_footpedal()
         if self._footpedal is not None:
+
             def _cb(code: int) -> None:
                 if code == PEDAL_LEFT:
                     rc = getattr(self, "_recording_controller", None)
@@ -48,9 +54,12 @@ class SpaceMouseInterface(TeleopInterface):
                     self._pedal_success.set()
                 elif code == PEDAL_RIGHT:
                     self._pedal_failure.set()
+
             self._footpedal.on_press(_cb)
             self._footpedal.start()
-            print("  ✓ FootPedal ready: left=trigger/pause  middle=success  right=failure")
+            print(
+                "  ✓ FootPedal ready: left=trigger/pause  middle=success  right=failure"
+            )
 
     def close(self) -> None:
         if getattr(self, "_footpedal", None) is not None:

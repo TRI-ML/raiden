@@ -1125,8 +1125,12 @@ class RaidenPolicyServer(chiral.PolicyServer):
             "w": res.width,
             "intrinsics": K,
             # Convenience callables — avoid re-importing sl outside this method.
-            "get_image_ts_ns": lambda: cam.get_timestamp(sl.TIME_REFERENCE.IMAGE).get_nanoseconds(),
-            "get_current_ts_ns": lambda: cam.get_timestamp(sl.TIME_REFERENCE.CURRENT).get_nanoseconds(),
+            "get_image_ts_ns": lambda: cam.get_timestamp(
+                sl.TIME_REFERENCE.IMAGE
+            ).get_nanoseconds(),
+            "get_current_ts_ns": lambda: cam.get_timestamp(
+                sl.TIME_REFERENCE.CURRENT
+            ).get_nanoseconds(),
             # Stereo inference fields (used when stereo_method is ffs or tri_stereo).
             "stereo_lock": threading.Lock(),
             "latest_left": None,
@@ -1335,7 +1339,9 @@ class RaidenPolicyServer(chiral.PolicyServer):
         same timestamp.  Timestamped before reading obs, using the ZED SDK clock
         (Unix ns) to match the training data clock.
         """
+        target_dt = 1.0 / 100.0
         while self._running:
+            loop_start = time.monotonic()
             try:
                 # Timestamp before reading — matches recorder._robot_loop.
                 ts = self._get_zed_current_time_ns()
@@ -1361,7 +1367,10 @@ class RaidenPolicyServer(chiral.PolicyServer):
 
             except Exception as e:
                 print(f"Proprio read error: {e}")
-            time.sleep(1 / 100)
+            elapsed = time.monotonic() - loop_start
+            sleep_time = target_dt - elapsed
+            if sleep_time > 0:
+                time.sleep(sleep_time)
 
     # -------------------------------------------------------------------------
     # Rerun visualization

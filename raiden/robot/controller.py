@@ -25,12 +25,14 @@ sys.path.insert(
     0, os.path.join(os.path.dirname(__file__), "..", "..", "third_party", "i2rt")
 )
 
-from i2rt.motor_drivers.can_interface import CanInterface
-from i2rt.robots.get_robot import get_yam_robot
-from i2rt.robots.motor_chain_robot import MotorChainRobot
-from i2rt.robots.robot import Robot
-from i2rt.robots.utils import ARM_YAM_XML_PATH as _ARM_YAM_XML_PATH
-from i2rt.robots.utils import GripperType
+from i2rt.motor_drivers.can_interface import CanInterface  # noqa: E402
+from i2rt.robots.get_robot import get_yam_robot  # noqa: E402
+from i2rt.robots.motor_chain_robot import MotorChainRobot  # noqa: E402
+from i2rt.robots.robot import Robot  # noqa: E402
+from i2rt.robots.utils import ARM_YAM_XML_PATH as _ARM_YAM_XML_PATH  # noqa: E402
+from i2rt.robots.utils import GripperType  # noqa: E402
+from raiden.robot._jparse import jparse_step  # noqa: E402
+from raiden.robot.footpedal import try_open_footpedal  # noqa: E402
 
 # Patch CanInterface to store self.channel, which PassiveEncoderReader needs
 # but CanInterface never set it (DMChainCanInterface does, but not CanInterface).
@@ -44,9 +46,6 @@ def _patched_can_interface_init(self, channel="PCAN_USBBUS1", *args, **kwargs):
 
 
 CanInterface.__init__ = _patched_can_interface_init
-
-from raiden.robot._jparse import jparse_step
-from raiden.robot.footpedal import try_open_footpedal
 
 # Export for convenience
 __all__ = [
