@@ -25,11 +25,25 @@ sys.path.insert(
     0, os.path.join(os.path.dirname(__file__), "..", "..", "third_party", "i2rt")
 )
 
+from i2rt.motor_drivers.can_interface import CanInterface
 from i2rt.robots.get_robot import get_yam_robot
 from i2rt.robots.motor_chain_robot import MotorChainRobot
 from i2rt.robots.robot import Robot
 from i2rt.robots.utils import ARM_YAM_XML_PATH as _ARM_YAM_XML_PATH
 from i2rt.robots.utils import GripperType
+
+# Patch CanInterface to store self.channel, which PassiveEncoderReader needs
+# but CanInterface never set it (DMChainCanInterface does, but not CanInterface).
+_orig_can_interface_init = CanInterface.__init__
+
+
+def _patched_can_interface_init(self, channel="PCAN_USBBUS1", *args, **kwargs):
+    _orig_can_interface_init(self, channel, *args, **kwargs)
+    if not hasattr(self, "channel"):
+        self.channel = channel
+
+
+CanInterface.__init__ = _patched_can_interface_init
 
 from raiden.robot._jparse import jparse_step
 from raiden.robot.footpedal import try_open_footpedal
@@ -501,8 +515,13 @@ class RobotController:
             self.follower_r = results["right follower"]
         if self.use_left_follower:
             self.follower_l = results["left follower"]
+        # The teaching-handle leader arm is lighter than the follower (no heavy
+        # gripper), so the default gravity_comp_factor=1.3 over-compensates.
+        _LEADER_GRAVITY_COMP_FACTOR = 1.1
+
         if self.use_right_leader:
             leader_r_base = results["right leader"]
+            leader_r_base.gravity_comp_factor = _LEADER_GRAVITY_COMP_FACTOR
             self.leader_r = YAMLeaderRobot(leader_r_base)
             self.last_button_state["leader_r"] = 0.0
             self._last_verdict_state["leader_r_top"] = 0.0
@@ -512,6 +531,7 @@ class RobotController:
             self.kd_gains["leader_r"] = self.leader_r._robot._kd.copy()
         if self.use_left_leader:
             leader_l_base = results["left leader"]
+            leader_l_base.gravity_comp_factor = _LEADER_GRAVITY_COMP_FACTOR
             self.leader_l = YAMLeaderRobot(leader_l_base)
             self.last_button_state["leader_l"] = 0.0
             self._last_verdict_state["leader_l_top"] = 0.0
