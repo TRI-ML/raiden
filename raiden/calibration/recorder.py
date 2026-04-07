@@ -16,6 +16,7 @@ import rerun as rr
 from raiden._config import CALIBRATION_POSES_FILE, CAMERA_CONFIG
 from raiden.camera_config import CameraConfig
 from raiden.cameras.base import Camera
+from raiden.control import TeleopInterface
 from raiden.robot.controller import RobotController
 
 
@@ -63,29 +64,18 @@ class CalibrationPoseRecorder:
 
     def __init__(
         self,
+        interface: TeleopInterface,
         output_file: str = CALIBRATION_POSES_FILE,
         camera_config_file: str = CAMERA_CONFIG,
         charuco_config: Optional[ChArUcoBoardConfig] = None,
-        control: str = "leader",
-        spacemouse_path_r: str = "/dev/hidraw7",
-        spacemouse_path_l: str = "/dev/hidraw6",
-        vel_scale: float = 2.0,
-        rot_scale: float = 3.0,
-        invert_rotation: bool = False,
     ):
+        self.interface = interface
         self.output_file = Path(output_file)
         self.output_file.parent.mkdir(parents=True, exist_ok=True)
 
         self.camera_config_file = camera_config_file
         self.charuco_config = charuco_config or ChArUcoBoardConfig()
         self.poses: List[CalibrationPose] = []
-
-        self.control = control
-        self.spacemouse_path_r = spacemouse_path_r
-        self.spacemouse_path_l = spacemouse_path_l
-        self.vel_scale = vel_scale
-        self.rot_scale = rot_scale
-        self.invert_rotation = invert_rotation
 
         self.robot_controller: Optional[RobotController] = None
         self.calibration_targets: List[str] = []
@@ -114,10 +104,9 @@ class CalibrationPoseRecorder:
             if cam not in self.calibration_targets:
                 self.calibration_targets.append(cam)
 
-        use_leaders = self.control != "spacemouse"
         self.robot_controller = RobotController(
-            use_right_leader=use_leaders and has_right,
-            use_left_leader=use_leaders and has_left,
+            use_right_leader=self.interface.uses_leaders and has_right,
+            use_left_leader=self.interface.uses_leaders and has_left,
             use_right_follower=has_right,
             use_left_follower=has_left,
         )
@@ -125,16 +114,8 @@ class CalibrationPoseRecorder:
         # Complete setup: check CAN -> init -> home -> grav comp
         self.robot_controller.setup_for_teleop_recording()
 
-        if self.control == "spacemouse":
-            self.robot_controller.warmup_spacemouse_ik()
-            self.robot_controller.attach_spacemice(
-                self.spacemouse_path_r, self.spacemouse_path_l
-            )
-            self.robot_controller.start_spacemouse_teleop(
-                vel_scale=self.vel_scale,
-                rot_scale=self.rot_scale,
-                invert_rotation=self.invert_rotation,
-            )
+        self.interface.setup(self.robot_controller)
+        self.interface.start(self.robot_controller)
 
     def record_current_pose(self, notes: str = "") -> CalibrationPose:
         """Record the current robot pose"""
@@ -286,8 +267,9 @@ class CalibrationPoseRecorder:
         self._open_cameras()
         self._start_rerun_stream()
 
-        # Initialize robots
+        # Initialize robots and open interface peripherals (footpedal, etc.)
         self.initialize_robots()
+        self.interface.open()
 
         # Setup signal handlers for emergency stop (SIGTERM)
         # Note: SIGINT (Ctrl+C) is handled via KeyboardInterrupt for graceful save
@@ -310,15 +292,15 @@ class CalibrationPoseRecorder:
 
         print("\nInstructions:")
         print("  1. Position the ChArUco board in a fixed location")
-        if self.control == "spacemouse":
-            print("  2. Move the robot arms using SpaceMouse")
-        else:
+        if self.interface.uses_leaders:
             print("  2. Move the LEADER arms - followers will automatically follow")
-        print("  3. Position so the board is clearly visible from the camera(s)")
-        if self.control == "spacemouse":
-            print("  4. Type 'r' to record pose")
         else:
+            print("  2. Move the robot arms using the input device")
+        print("  3. Position so the board is clearly visible from the camera(s)")
+        if self.interface.waits_for_button_start:
             print("  4. Press button on any leader arm OR type 'r' to record pose")
+        else:
+            print("  4. Type 'r' to record pose")
         print(
             f"  5. Record at least {min_poses} diverse poses (vary distance and angle)"
         )
@@ -364,14 +346,10 @@ class CalibrationPoseRecorder:
                 # Monitor button presses in a loop
                 command = None
                 while command is None:
-                    # Check for button press (leader mode only)
-                    if (
-                        has_leaders
-                        and self.control != "spacemouse"
-                        and self.check_button_press()
-                    ):
-                        print("\n\nButton pressed! Recording pose...")
-                        time.sleep(0.5)  # Debounce
+                    # Interface poll: leader button or footpedal left → record pose
+                    if self.interface.poll(self.robot_controller):
+                        print("\n\nInput received! Recording pose...")
+                        time.sleep(0.1)  # Debounce
                         command = "r"
                         break
 
@@ -455,7 +433,7 @@ class CalibrationPoseRecorder:
                     print("  l - List recorded poses")
                     print("  q - Quit and save")
                     print("  h - Show help")
-                    if has_leaders and self.control != "spacemouse":
+                    if has_leaders and self.interface.waits_for_button_start:
                         print("\nButton Input:")
                         print("  - Press button on any leader arm to record")
 
@@ -485,6 +463,7 @@ class CalibrationPoseRecorder:
             if self.robot_controller and self.robot_controller.has_robots():
                 self.robot_controller.emergency_stop()
         finally:
+            self.interface.close()
             self._stop_rerun_stream()
             # Cleanup robots
             if self.robot_controller:
@@ -492,27 +471,17 @@ class CalibrationPoseRecorder:
 
 
 def run_calibration_pose_recording(
+    interface: TeleopInterface,
     min_poses: int = 5,
     output_file: str = CALIBRATION_POSES_FILE,
     camera_config_file: str = CAMERA_CONFIG,
     charuco_config: Optional[ChArUcoBoardConfig] = None,
-    control: str = "leader",
-    spacemouse_path_r: str = "/dev/hidraw7",
-    spacemouse_path_l: str = "/dev/hidraw6",
-    vel_scale: float = 2.0,
-    rot_scale: float = 3.0,
-    invert_rotation: bool = False,
 ):
     """Main entry point for calibration pose recording"""
     recorder = CalibrationPoseRecorder(
+        interface=interface,
         output_file=output_file,
         camera_config_file=camera_config_file,
         charuco_config=charuco_config,
-        control=control,
-        spacemouse_path_r=spacemouse_path_r,
-        spacemouse_path_l=spacemouse_path_l,
-        vel_scale=vel_scale,
-        rot_scale=rot_scale,
-        invert_rotation=invert_rotation,
     )
     recorder.run_interactive_recording(min_poses=min_poses)

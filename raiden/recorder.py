@@ -47,6 +47,7 @@ import numpy as np
 from raiden._config import CALIBRATION_FILE, CAMERA_CONFIG
 from raiden.camera_config import CameraConfig
 from raiden.cameras import Camera
+from raiden.control import TeleopInterface
 from raiden.db.database import get_db
 from raiden.robot.controller import RobotController
 from raiden.utils import fzf_select
@@ -94,14 +95,14 @@ class DemonstrationRecorder:
         recording_dir: Path,
         task_name: str,
         task_instruction: str,
-        control: str = "leader",
+        interface: TeleopInterface,
     ):
         self.cameras = cameras
         self.robot_controller = robot_controller
         self.recording_dir = recording_dir
         self.task_name = task_name
         self.task_instruction = task_instruction
-        self.control = control
+        self.interface = interface
 
         self.cameras_dir = recording_dir / "cameras"
 
@@ -354,7 +355,7 @@ class DemonstrationRecorder:
             robot_hz=round(hz, 1),
             cameras=[c.name for c in self.cameras],
             camera_fps=30,
-            control=self.control,
+            control=self.interface.name,
             complete=complete,
             converted=False,
         )
@@ -555,13 +556,13 @@ def upload_to_s3(recording_dir: Path, bucket: str, prefix: str) -> None:
 
 def _wait_for_enter_or_quit(
     robot_controller: RobotController,
-    pedal_trigger: Optional[threading.Event] = None,
+    interface: TeleopInterface,
 ) -> bool:
     """Wait for Enter/Space (proceed) or 'q' (quit session).
 
     Returns:
         True  — 'q' pressed or footpedal e-stop; caller should end the session.
-        False — Enter/Space or pedal_trigger fired; caller should proceed.
+        False — Enter/Space or footpedal left fired; caller should proceed.
     """
     fd = sys.stdin.fileno()
     old_settings = termios.tcgetattr(fd)
@@ -570,8 +571,7 @@ def _wait_for_enter_or_quit(
         while True:
             if robot_controller.session_estop_requested:
                 return True
-            if pedal_trigger is not None and pedal_trigger.is_set():
-                pedal_trigger.clear()
+            if interface.poll(robot_controller):
                 return False
             if select.select([sys.stdin], [], [], 0)[0]:
                 ch = sys.stdin.read(1)
@@ -586,9 +586,7 @@ def _wait_for_enter_or_quit(
 
 def _wait_for_verdict(
     robot_controller: RobotController,
-    control: str,
-    pedal_success: Optional[threading.Event] = None,
-    pedal_failure: Optional[threading.Event] = None,
+    interface: TeleopInterface,
 ) -> Optional[str]:
     """After recording stops, wait for the user to mark success or failure.
 
@@ -604,13 +602,11 @@ def _wait_for_verdict(
     Returns:
         "success", "failure", or None.
     """
-    has_pedal = pedal_success is not None or pedal_failure is not None
     print("\n" + "-" * 60)
     print("  Mark this demonstration:")
     lines = []
-    if has_pedal:
-        lines += ["    Middle pedal → success", "    Right pedal  → failure"]
-    if control != "spacemouse":
+    lines += ["    Middle pedal → success", "    Right pedal  → failure"]
+    if interface.supports_verdict_button:
         lines += ["    Top button    → success", "    Bottom button → failure"]
     lines += ["    Enter → success   f → failure   other key → skip"]
     print("\n".join(lines))
@@ -622,11 +618,9 @@ def _wait_for_verdict(
         tty.setcbreak(fd)
         deadline = time.monotonic() + 30.0  # 30 s timeout
         while time.monotonic() < deadline:
-            if pedal_success is not None and pedal_success.is_set():
-                pedal_success.clear()
+            if interface.poll_success(robot_controller):
                 return "success"
-            if pedal_failure is not None and pedal_failure.is_set():
-                pedal_failure.clear()
+            if interface.poll_failure(robot_controller):
                 return "failure"
             if select.select([sys.stdin], [], [], 0)[0]:
                 ch = sys.stdin.read(1)
@@ -635,7 +629,7 @@ def _wait_for_verdict(
                 if ch.lower() == "f":
                     return "failure"
                 return None
-            if control != "spacemouse":
+            if interface.supports_verdict_button:
                 verdict = robot_controller.check_verdict_button()
                 if verdict is not None:
                     return verdict
@@ -648,13 +642,13 @@ def _wait_for_verdict(
 
 def _wait_for_start_or_quit(
     robot_controller: RobotController,
-    pedal_trigger: Optional[threading.Event] = None,
+    interface: TeleopInterface,
 ) -> bool:
     """Wait for a leader button press (start) or the 'q' key (quit session).
 
     Returns:
         True  — 'q' pressed or footpedal e-stop; caller should end the session.
-        False — leader button / pedal_trigger pressed; caller should start recording.
+        False — leader button / footpedal left pressed; caller should start recording.
     """
     fd = sys.stdin.fileno()
     old_settings = termios.tcgetattr(fd)
@@ -663,15 +657,12 @@ def _wait_for_start_or_quit(
         while True:
             if robot_controller.session_estop_requested:
                 return True
-            if pedal_trigger is not None and pedal_trigger.is_set():
-                pedal_trigger.clear()
+            if interface.poll(robot_controller):
                 return False
             if select.select([sys.stdin], [], [], 0)[0]:
                 ch = sys.stdin.read(1)
                 if ch.lower() == "q":
                     return True
-            if robot_controller.check_button_press():
-                return False
             time.sleep(0.05)
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
@@ -685,12 +676,7 @@ def _wait_for_start_or_quit(
 def run_recording(
     s3_bucket: Optional[str],
     s3_prefix: str,
-    control: str = "leader",
-    spacemouse_path_r: str = "/dev/hidraw4",
-    spacemouse_path_l: str = "/dev/hidraw5",
-    vel_scale: float = 2.0,
-    rot_scale: float = 3.0,
-    invert_rotation: bool = False,
+    interface: TeleopInterface,
     camera_config_file: str = CAMERA_CONFIG,
     calibration_file: str = CALIBRATION_FILE,
     arms: str = "bimanual",
@@ -745,35 +731,7 @@ def run_recording(
             print(f"  Warning: calibration file not found at {calib_src}")
 
     # ── optional footpedal (once per session) ────────────────────────────
-    from raiden.robot.footpedal import (  # noqa: PLC0415
-        PEDAL_LEFT,
-        PEDAL_MIDDLE,
-        PEDAL_RIGHT,
-        try_open_footpedal,
-    )
-
-    _pedal_start = threading.Event()
-    _pedal_success = threading.Event()
-    _pedal_failure = threading.Event()
-    _is_recording: List[bool] = [False]
-
-    _footpedal = try_open_footpedal()
-    if _footpedal is not None:
-
-        def _pedal_cb(code: int) -> None:
-            if code == PEDAL_LEFT:
-                if _is_recording[0] and _active_ctrl[0] is not None:
-                    _active_ctrl[0].soft_pause()
-                else:
-                    _pedal_start.set()
-            elif code == PEDAL_MIDDLE:
-                _pedal_success.set()
-            elif code == PEDAL_RIGHT:
-                _pedal_failure.set()
-
-        _footpedal.on_press(_pedal_cb)
-        _footpedal.start()
-        print("  ✓ FootPedal ready: left=start/stop  middle=success  right=failure\n")
+    interface.open()
 
     # ── one-time camera + robot initialisation ───────────────────────────
     print("Initializing cameras...")
@@ -781,8 +739,7 @@ def run_recording(
         cameras = load_cameras_from_config(camera_config_file)
     except Exception as e:
         print(f"Error initialising cameras: {e}")
-        if _footpedal is not None:
-            _footpedal.close()
+        interface.close()
         return
     print(f"✓ {len(cameras)} camera(s) ready\n")
 
@@ -806,7 +763,6 @@ def run_recording(
 
     use_right = arms == "bimanual"
     use_left = True
-    use_leaders = control == "leader"
 
     try:
         while True:
@@ -814,8 +770,8 @@ def run_recording(
 
             # ── per-episode: init robots ──────────────────────────────────
             robot_controller = RobotController(
-                use_right_leader=use_leaders and use_right,
-                use_left_leader=use_leaders and use_left,
+                use_right_leader=interface.uses_leaders and use_right,
+                use_left_leader=interface.uses_leaders and use_left,
                 use_right_follower=use_right,
                 use_left_follower=use_left,
             )
@@ -827,8 +783,8 @@ def run_recording(
                 print(f"Error initialising robots: {e}")
                 break
 
-            if control == "spacemouse":
-                robot_controller.warmup_spacemouse_ik()
+            # Setup interface (warmup IK, attach devices, etc.)
+            interface.setup(robot_controller)
 
             # Flush stdout so any SDK log output has time to drain before
             # printing the READY banner.
@@ -840,19 +796,17 @@ def run_recording(
             print("  READY")
             print("=" * 60)
             print(f"\n  Data dir   : {task_dir}")
-            if control == "spacemouse":
-                print("\n  Press Enter or left pedal to START recording.")
-            else:
+            if interface.waits_for_button_start:
                 print("\n  Press button on any leader arm or left pedal to START.")
+            else:
+                print("\n  Press Enter or left pedal to START recording.")
             print("  Press 'q' to end session.\n")
             print("=" * 60 + "\n")
 
-            _pedal_start.clear()
-            pedal_trigger = _pedal_start if _footpedal is not None else None
-            if control == "spacemouse":
-                quit_session = _wait_for_enter_or_quit(robot_controller, pedal_trigger)
+            if interface.waits_for_button_start:
+                quit_session = _wait_for_start_or_quit(robot_controller, interface)
             else:
-                quit_session = _wait_for_start_or_quit(robot_controller, pedal_trigger)
+                quit_session = _wait_for_enter_or_quit(robot_controller, interface)
             if quit_session:
                 print("\nEnding session.\n")
                 robot_controller.shutdown()
@@ -870,87 +824,55 @@ def run_recording(
                 recording_dir=recording_dir,
                 task_name=task_name,
                 task_instruction=task_instruction,
-                control=control,
+                interface=interface,
             )
-            if control == "spacemouse":
-                robot_controller.attach_spacemice(spacemouse_path_r, spacemouse_path_l)
-                robot_controller.start_spacemouse_teleop(
-                    vel_scale=vel_scale,
-                    rot_scale=rot_scale,
-                    invert_rotation=invert_rotation,
-                )
-            else:
-                robot_controller.start_teleoperation()
+            interface.start(robot_controller)
             recorder.start_recording()
-            robot_controller.enable_estop()  # foot pedal e-stop active during recording
-            _is_recording[0] = True
+            robot_controller.enable_estop()
+            interface.set_active_recording(robot_controller)
 
             # ── wait for stop ────────────────────────────────────────────
             forced_failure = False
             forced_success = False
-            if control == "spacemouse":
-                print(
-                    "  SpaceMouse active. "
-                    "Enter/left pedal=stop  middle pedal=success  right pedal=failure\n"
-                )
-                _pedal_start.clear()
-                _pedal_success.clear()
-                _pedal_failure.clear()
-                fd = sys.stdin.fileno()
-                old_settings = termios.tcgetattr(fd)
-                try:
-                    tty.setcbreak(fd)
-                    while True:
-                        if robot_controller.session_estop_requested:
-                            break
-                        if _footpedal is not None:
-                            if _pedal_start.is_set():
-                                _pedal_start.clear()
-                                break
-                            if _pedal_success.is_set():
-                                _pedal_success.clear()
-                                forced_success = True
-                                break
-                            if _pedal_failure.is_set():
-                                _pedal_failure.clear()
-                                forced_failure = True
-                                break
+
+            needs_stdin = not interface.waits_for_button_start
+            fd = sys.stdin.fileno()
+            old_settings = termios.tcgetattr(fd) if needs_stdin else None
+            if needs_stdin:
+                tty.setcbreak(fd)
+            try:
+                while True:
+                    if robot_controller.session_estop_requested:
+                        break
+                    if interface.poll_success(robot_controller):
+                        forced_success = True
+                        break
+                    if interface.poll_failure(robot_controller):
+                        forced_failure = True
+                        break
+                    if needs_stdin:
                         if select.select([sys.stdin], [], [], 0)[0]:
                             ch = sys.stdin.read(1)
                             if ch in ("\r", "\n", " "):
                                 break
-                        time.sleep(0.05)
-                finally:
-                    termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-            else:
-                _pedal_start.clear()
-                while True:
-                    if robot_controller.session_estop_requested:
-                        break
-                    if _footpedal is not None and _pedal_start.is_set():
-                        _pedal_start.clear()
-                        break
-                    if robot_controller.check_button_press():
-                        break
-                    if robot_controller.check_failure_button():
-                        forced_failure = True
-                        break
+                    else:
+                        if interface.poll(robot_controller):
+                            break
                     time.sleep(0.05)
+            finally:
+                if old_settings is not None:
+                    termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
-            _is_recording[0] = False
+            interface.set_active_recording(None)
             estop = robot_controller.session_estop_requested
 
             # ── verdict phase (arms still active, before shutdown) ────────
-            _pedal_success.clear()
-            _pedal_failure.clear()
             if estop or forced_failure:
                 verdict: Optional[str] = "failure"
             elif forced_success:
                 verdict = "success"
             else:
-                pedal_s = _pedal_success if _footpedal is not None else None
-                pedal_f = _pedal_failure if _footpedal is not None else None
-                verdict = _wait_for_verdict(robot_controller, control, pedal_s, pedal_f)
+                verdict = _wait_for_verdict(robot_controller, interface)
 
             # ── stop episode (shuts down robots, keeps cameras open) ──────
             saved_dir = recorder.stop_recording(complete=not estop)
@@ -1012,13 +934,12 @@ def run_recording(
             robot_controller = None
     finally:
         # ── session teardown ──────────────────────────────────────────────
-        # Robots are shut down per-episode; only cameras remain to close.
+        # Robots are shut down per-episode; only cameras and interface remain.
         if robot_controller is not None:
             robot_controller.shutdown()
         for cam in cameras:
             cam.close()
-        if _footpedal is not None:
-            _footpedal.close()
+        interface.close()
 
     # ── optional S3 upload ───────────────────────────────────────────────
     if s3_bucket and last_saved_dir:

@@ -17,6 +17,7 @@ from raiden._config import (
 )
 from raiden.calibration.recorder import run_calibration_pose_recording
 from raiden.calibration.runner import CalibrationRunner
+from raiden.control import build_interface
 from raiden.converter import convert_task, select_tasks
 from raiden.recorder import run_recording
 from raiden.robot.replay import run_replay
@@ -454,7 +455,7 @@ def main():
                 rot_scale=command.rot_scale,
                 invert_rotation=command.invert_rotation,
                 arms=command.arms,
-            )
+            )  # teleop builds its own interface internally via build_interface()
 
         elif subcommand == "record":
             sys.argv.pop(1)
@@ -470,12 +471,14 @@ def main():
             run_recording(
                 s3_bucket=command.s3_bucket,
                 s3_prefix=command.s3_prefix,
-                control=command.control,
-                spacemouse_path_r=command.spacemouse_path_r,
-                spacemouse_path_l=command.spacemouse_path_l,
-                vel_scale=command.vel_scale,
-                rot_scale=command.rot_scale,
-                invert_rotation=command.invert_rotation,
+                interface=build_interface(
+                    command.control,
+                    spacemouse_path_r=command.spacemouse_path_r,
+                    spacemouse_path_l=command.spacemouse_path_l,
+                    vel_scale=command.vel_scale,
+                    rot_scale=command.rot_scale,
+                    invert_rotation=command.invert_rotation,
+                ),
                 arms=command.arms,
                 data_dir=command.data_dir,
             )
@@ -519,15 +522,17 @@ def main():
             )
             sm = _load_spacemouse_config()
             run_calibration_pose_recording(
+                interface=build_interface(
+                    command.control,
+                    spacemouse_path_r=sm.get("path_r", command.spacemouse_path_r),
+                    spacemouse_path_l=sm.get("path_l", command.spacemouse_path_l),
+                    vel_scale=command.vel_scale,
+                    rot_scale=command.rot_scale,
+                    invert_rotation=command.invert_rotation,
+                ),
                 min_poses=command.min_poses,
                 output_file=command.output_file,
                 camera_config_file=CAMERA_CONFIG,
-                control=command.control,
-                spacemouse_path_r=sm.get("path_r", command.spacemouse_path_r),
-                spacemouse_path_l=sm.get("path_l", command.spacemouse_path_l),
-                vel_scale=command.vel_scale,
-                rot_scale=command.rot_scale,
-                invert_rotation=command.invert_rotation,
             )
 
         elif subcommand == "calibrate":

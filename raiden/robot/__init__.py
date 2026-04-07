@@ -9,7 +9,6 @@ from raiden.robot.controller import (
 )
 from raiden.robot.footpedal import FootPedal, try_open_footpedal
 from raiden.robot.replay import run_replay
-from raiden.robot.teleop import run_bimanual_teleop
 
 __all__ = [
     "FOLLOWER_HOME_POS",
@@ -18,7 +17,6 @@ __all__ = [
     "RobotController",
     "YAMLeaderRobot",
     "check_can_interface",
-    "run_bimanual_teleop",
     "run_replay",
     "smooth_move_joints",
     "spacemouse_to_target_pose",
