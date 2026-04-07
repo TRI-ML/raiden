@@ -371,10 +371,7 @@ class RaidenPolicyServer(chiral.PolicyServer):
                 target=self._camera_loop, args=(name,), daemon=True
             ).start()
 
-        for name in self.proprios:
-            threading.Thread(
-                target=self._proprio_loop, args=(name,), daemon=True
-            ).start()
+        threading.Thread(target=self._proprio_loop, daemon=True).start()
 
         # Single dedicated thread for learned stereo depth inference.
         # Processes all cameras sequentially so the GPU is never contested.
@@ -525,7 +522,6 @@ class RaidenPolicyServer(chiral.PolicyServer):
         streams = []
         if self._robot.follower_r:
             streams.append(chiral.ProprioConfig(name="follower_r_joint_pos", size=DOF))
-            streams.append(chiral.ProprioConfig(name="follower_r_joint_vel", size=DOF))
             streams.append(
                 chiral.ProprioConfig(
                     name=f"robot__actual__poses__right::{_ROBOT}__xyz", size=3
@@ -543,7 +539,6 @@ class RaidenPolicyServer(chiral.PolicyServer):
             )
         if self._robot.follower_l:
             streams.append(chiral.ProprioConfig(name="follower_l_joint_pos", size=DOF))
-            streams.append(chiral.ProprioConfig(name="follower_l_joint_vel", size=DOF))
             streams.append(
                 chiral.ProprioConfig(
                     name=f"robot__actual__poses__left::{_ROBOT}__xyz", size=3
@@ -1332,42 +1327,40 @@ class RaidenPolicyServer(chiral.PolicyServer):
     # Proprioception
     # -------------------------------------------------------------------------
 
-    def _proprio_loop(self, name: str) -> None:
-        """Read robot joint state at ~100 Hz, push to the buffer, and record history."""
+    def _proprio_loop(self) -> None:
+        """Read robot joint state at ~100 Hz, push to all buffers under one timestamp.
+
+        A single loop matches the recorder's _robot_loop: one get_all_observations()
+        call per cycle so left and right joints are read atomically and share the
+        same timestamp.  Timestamped before reading obs, using the ZED SDK clock
+        (Unix ns) to match the training data clock.
+        """
         while self._running:
             try:
-                # Timestamp before reading obs — matches recorder._robot_loop which
-                # calls ref_camera.get_current_timestamp_ns() before get_all_observations().
-                # Using the ZED SDK clock (Unix ns) so proprio and camera timestamps are
-                # on the same clock as the training data.
+                # Timestamp before reading — matches recorder._robot_loop.
                 ts = self._get_zed_current_time_ns()
                 obs_all = self._robot.get_all_observations()
-                val: Optional[np.ndarray] = None
 
-                if name == "follower_r_joint_pos" and "follower_r" in obs_all:
+                updates: dict[str, np.ndarray] = {}
+                if "follower_r" in obs_all:
                     obs = obs_all["follower_r"]
-                    val = np.concatenate(
+                    updates["follower_r_joint_pos"] = np.concatenate(
                         [obs["joint_pos"], obs["gripper_pos"].reshape(1)]
                     )
-                elif name == "follower_r_joint_vel" and "follower_r" in obs_all:
-                    vel = obs_all["follower_r"]["joint_vel"]
-                    val = np.concatenate([vel, [0.0]])  # pad gripper vel
-                elif name == "follower_l_joint_pos" and "follower_l" in obs_all:
+                if "follower_l" in obs_all:
                     obs = obs_all["follower_l"]
-                    val = np.concatenate(
+                    updates["follower_l_joint_pos"] = np.concatenate(
                         [obs["joint_pos"], obs["gripper_pos"].reshape(1)]
                     )
-                elif name == "follower_l_joint_vel" and "follower_l" in obs_all:
-                    vel = obs_all["follower_l"]["joint_vel"]
-                    val = np.concatenate([vel, [0.0]])  # pad gripper vel
 
-                if val is not None:
+                for name, val in updates.items():
                     self.update_proprio(name, val)
-                    with self._proprio_history_locks[name]:
-                        self._proprio_history[name].append((ts, val.copy()))
+                    if name in self._proprio_history:
+                        with self._proprio_history_locks[name]:
+                            self._proprio_history[name].append((ts, val.copy()))
 
             except Exception as e:
-                print(f"Proprio read error ({name}): {e}")
+                print(f"Proprio read error: {e}")
             time.sleep(1 / 100)
 
     # -------------------------------------------------------------------------
