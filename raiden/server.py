@@ -310,9 +310,11 @@ class RaidenPolicyServer(chiral.PolicyServer):
         self._open_cameras()
         self._prepare_camera_transforms()
 
-        # Per-camera frame arrival timestamps (monotonic_ns) updated by capture
-        # loops, plus one-time phase offsets computed at startup so all cameras
-        # share a common time axis.  Initialised before threads start.
+        # Per-camera frame timestamps (Unix ns) updated by capture loops, plus
+        # one-time phase offsets computed at startup so all cameras share a common
+        # time axis.  ZED cameras use the SDK hardware clock; RealSense uses
+        # time.time_ns() recorded immediately after wait_for_frames().
+        # Initialised before threads start.
         self._cam_arrival_ts_ns: dict[str, int] = {
             name: 0 for name in self._cam_handles
         }
@@ -337,8 +339,8 @@ class RaidenPolicyServer(chiral.PolicyServer):
         super().__init__(host=host, port=port)
 
         # Proprio interpolation ring buffers — keyed by proprio name, each holds
-        # (monotonic_ns, value) pairs.  Initialised after super().__init__() since
-        # proprio names come from proprio_configs().
+        # (Unix ns via ZED SDK clock, value) pairs.  Initialised after super().__init__()
+        # since proprio names come from proprio_configs().
         self._proprio_history: dict[str, deque] = {
             name: deque(maxlen=_PROPRIO_HISTORY_SIZE) for name in self.proprios
         }
@@ -675,6 +677,20 @@ class RaidenPolicyServer(chiral.PolicyServer):
     # Camera temporal alignment
     # -------------------------------------------------------------------------
 
+    def _get_zed_current_time_ns(self) -> int:
+        """Return the current time in nanoseconds using the ZED SDK hardware clock.
+
+        Queries the reference camera's ZED SDK clock (sl.TIME_REFERENCE.CURRENT),
+        which is Unix nanoseconds — the same clock used by the recorder to timestamp
+        proprioception samples.  Falls back to ``time.time_ns()`` if no ZED camera
+        is available.
+        """
+        ref = self._get_reference_camera()
+        handle = self._cam_handles.get(ref)
+        if handle is not None and "get_current_ts_ns" in handle:
+            return handle["get_current_ts_ns"]()
+        return time.time_ns()
+
     def _get_reference_camera(self) -> str:
         """Return the reference camera name for temporal alignment.
         Prefers 'scene_camera'; falls back to the first camera in the config.
@@ -701,9 +717,9 @@ class RaidenPolicyServer(chiral.PolicyServer):
     def _compute_camera_offsets(self) -> None:
         """Compute per-camera phase offsets relative to the reference camera.
 
-        Captures ``time.monotonic_ns()`` arrival timestamps from the first frame
-        of each camera.  Since FPS is assumed consistent, this one-time offset
-        corrects the fixed phase difference between capture loops so that::
+        Captures frame timestamps from the first frame of each camera.  Since FPS
+        is assumed consistent, this one-time offset corrects the fixed phase
+        difference between capture loops so that::
 
             arrival_ts_ns + phase_offset_ns  →  unified time axis
         """
@@ -736,7 +752,7 @@ class RaidenPolicyServer(chiral.PolicyServer):
     def _interpolate_proprio(
         self, name: str, target_ts_ns: int
     ) -> Optional[np.ndarray]:
-        """Interpolate the proprio ring buffer to *target_ts_ns* (monotonic_ns).
+        """Interpolate the proprio ring buffer to *target_ts_ns* (Unix ns, ZED clock).
 
         Falls back to the latest buffered value when the history is too short
         (e.g. at startup).  Returns None if no data is available at all.
@@ -941,7 +957,7 @@ class RaidenPolicyServer(chiral.PolicyServer):
                     ref_cam
                 ] + self._cam_phase_offset_ns.get(ref_cam, 0)
         else:
-            ref_ts_ns = time.monotonic_ns()
+            ref_ts_ns = self._get_zed_current_time_ns()
 
         # Interpolate joint positions to reference timestamp for FK.
         q_r = self._interpolate_proprio("follower_r_joint_pos", ref_ts_ns)
@@ -1113,6 +1129,9 @@ class RaidenPolicyServer(chiral.PolicyServer):
             "h": res.height,
             "w": res.width,
             "intrinsics": K,
+            # Convenience callables — avoid re-importing sl outside this method.
+            "get_image_ts_ns": lambda: cam.get_timestamp(sl.TIME_REFERENCE.IMAGE).get_nanoseconds(),
+            "get_current_ts_ns": lambda: cam.get_timestamp(sl.TIME_REFERENCE.CURRENT).get_nanoseconds(),
             # Stereo inference fields (used when stereo_method is ffs or tri_stereo).
             "stereo_lock": threading.Lock(),
             "latest_left": None,
@@ -1179,6 +1198,9 @@ class RaidenPolicyServer(chiral.PolicyServer):
         )
         while self._running:
             if cam.grab(runtime) == sl.ERROR_CODE.SUCCESS:
+                # Record hardware capture timestamp immediately after grab, before
+                # any processing, so it matches the ZED clock used in the recorder.
+                frame_ts_ns = handle["get_image_ts_ns"]()
                 cam.retrieve_image(image_mat, sl.VIEW.LEFT)
                 # ZED returns BGRA; drop alpha channel → BGR.
                 color_bgr = image_mat.get_data()[:, :, :3].copy()
@@ -1220,7 +1242,7 @@ class RaidenPolicyServer(chiral.PolicyServer):
                     )
                 self.update_image(name, color_bgr[..., ::-1].copy())
                 with self._cam_ts_locks[name]:
-                    self._cam_arrival_ts_ns[name] = time.monotonic_ns()
+                    self._cam_arrival_ts_ns[name] = frame_ts_ns
 
     def _realsense_capture_loop(self, name: str, handle: dict, flip: bool) -> None:
         pipeline = handle["pipeline"]
@@ -1229,6 +1251,11 @@ class RaidenPolicyServer(chiral.PolicyServer):
         while self._running:
             try:
                 frames = pipeline.wait_for_frames(timeout_ms=500)
+                # Record Unix-ns timestamp immediately after wait_for_frames so it
+                # is on the same clock domain as the ZED hardware timestamps used
+                # for proprio interpolation.  Processing latency (resize etc.) is
+                # excluded from the timestamp.
+                frame_ts_ns = time.time_ns()
                 aligned = align.process(frames)
                 color_frame = aligned.get_color_frame()
                 depth_frame = aligned.get_depth_frame()
@@ -1254,7 +1281,7 @@ class RaidenPolicyServer(chiral.PolicyServer):
                 if name in self.depths:
                     self.update_depth(name, depth)
                 with self._cam_ts_locks[name]:
-                    self._cam_arrival_ts_ns[name] = time.monotonic_ns()
+                    self._cam_arrival_ts_ns[name] = frame_ts_ns
             except RuntimeError:
                 time.sleep(0.01)
 
@@ -1309,8 +1336,12 @@ class RaidenPolicyServer(chiral.PolicyServer):
         """Read robot joint state at ~100 Hz, push to the buffer, and record history."""
         while self._running:
             try:
+                # Timestamp before reading obs — matches recorder._robot_loop which
+                # calls ref_camera.get_current_timestamp_ns() before get_all_observations().
+                # Using the ZED SDK clock (Unix ns) so proprio and camera timestamps are
+                # on the same clock as the training data.
+                ts = self._get_zed_current_time_ns()
                 obs_all = self._robot.get_all_observations()
-                ts = time.monotonic_ns()
                 val: Optional[np.ndarray] = None
 
                 if name == "follower_r_joint_pos" and "follower_r" in obs_all:

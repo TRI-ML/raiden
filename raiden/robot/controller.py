@@ -62,6 +62,13 @@ __all__ = [
 FOLLOWER_HOME_POS = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0])  # 6 joints + gripper
 LEADER_HOME_POS = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])  # 6 joints only
 
+# Follower PD gains — explicitly defined so recording, replay, and serving all
+# use identical control parameters regardless of i2rt defaults.
+# Arm joints (6): kp from _ARM_HW_CONFIGS[ArmType.YAM].kp, kd from .kd
+# Gripper (1):    from GripperType.LINEAR_4310.get_motor_kp_kd()
+FOLLOWER_KP = np.array([80.0, 80.0, 80.0, 40.0, 10.0, 10.0, 20.0])
+FOLLOWER_KD = np.array([5.0, 5.0, 5.0, 1.5, 1.5, 1.5, 0.5])
+
 # Gripper closing safety threshold in normalized [0,1] gripper space.
 # Gripper is stopped from closing further when commanded position is more than
 # this amount below the actual position (indicating the fingers are blocked).
@@ -513,8 +520,14 @@ class RobotController:
 
         if self.use_right_follower:
             self.follower_r = results["right follower"]
+            self.follower_r.update_kp_kd(kp=FOLLOWER_KP, kd=FOLLOWER_KD)
+            self.kp_gains["follower_r"] = FOLLOWER_KP.copy()
+            self.kd_gains["follower_r"] = FOLLOWER_KD.copy()
         if self.use_left_follower:
             self.follower_l = results["left follower"]
+            self.follower_l.update_kp_kd(kp=FOLLOWER_KP, kd=FOLLOWER_KD)
+            self.kp_gains["follower_l"] = FOLLOWER_KP.copy()
+            self.kd_gains["follower_l"] = FOLLOWER_KD.copy()
         # The teaching-handle leader arm is lighter than the follower (no heavy
         # gripper), so the default gravity_comp_factor=1.3 over-compensates.
         _LEADER_GRAVITY_COMP_FACTOR = 1.1
@@ -541,6 +554,8 @@ class RobotController:
             self.kd_gains["leader_l"] = self.leader_l._robot._kd.copy()
 
         print("✓ All robots initialized")
+        print(f"  Follower kp: {FOLLOWER_KP}")
+        print(f"  Follower kd: {FOLLOWER_KD}")
 
         # Enable gravity compensation mode if requested
         if gravity_comp_mode:
@@ -573,7 +588,14 @@ class RobotController:
             self.leader_l.update_kp_kd(
                 kp=self.kp_gains["leader_l"], kd=self.kd_gains["leader_l"]
             )
-        # Note: Followers use default gains, restored automatically
+        if self.follower_r and "follower_r" in self.kp_gains:
+            self.follower_r.update_kp_kd(
+                kp=self.kp_gains["follower_r"], kd=self.kd_gains["follower_r"]
+            )
+        if self.follower_l and "follower_l" in self.kp_gains:
+            self.follower_l.update_kp_kd(
+                kp=self.kp_gains["follower_l"], kd=self.kd_gains["follower_l"]
+            )
 
         print("✓ Position control restored")
 
