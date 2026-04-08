@@ -924,7 +924,7 @@ class RobotController:
 
                 follower.command_joint_pos(follower_cmd)
                 self._last_commanded_pos[side] = follower_cmd
-                time.sleep(0.001)  # 1000 Hz control loop
+                time.sleep(0.01)  # 100 Hz — matches inference command rate
 
             except Exception as e:
                 print(f"  - Error in {side} teleoperation: {e}")

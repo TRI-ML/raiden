@@ -866,7 +866,7 @@ class RaidenPolicyServer(chiral.PolicyServer):
                 kwargs={
                     "start_joint_positions": start_l,
                     "time_interval_s": 1.0 / _CONTROL_HZ,
-                    "steps": 15,
+                    "steps": 10,
                     "stop_event": self._estop_active,
                 },
                 daemon=True,
@@ -879,7 +879,7 @@ class RaidenPolicyServer(chiral.PolicyServer):
                 kwargs={
                     "start_joint_positions": start_r,
                     "time_interval_s": 1.0 / _CONTROL_HZ,
-                    "steps": 15,
+                    "steps": 10,
                     "stop_event": self._estop_active,
                 },
                 daemon=True,
