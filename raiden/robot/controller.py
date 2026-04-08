@@ -917,15 +917,10 @@ class RobotController:
                 leader_pos, _ = leader.get_info()
                 leader.command_joint_pos(leader_pos[:6])
 
-                # Gripper: move toward the leader's target at constant speed,
-                # then clamp if blocked by an object.
-                leader_gripper_target = leader_pos[6]
-                step = _GRIPPER_SAFETY_THRESHOLD * 0.9
+                # Gripper control: map leader encoder (0–1) directly to follower.
+                # Safety clamp prevents closing further when fingers are blocked.
                 follower_gripper_actual = follower.get_joint_pos()[6]
-                if leader_gripper_target <= 0.8:
-                    follower_gripper_cmd = max(0.0, follower_gripper_actual - step)
-                else:
-                    follower_gripper_cmd = min(1.0, follower_gripper_actual + step)
+                follower_gripper_cmd = float(np.clip(leader_pos[6], 0.0, 1.0))
                 if (
                     follower_gripper_actual - follower_gripper_cmd
                     > _GRIPPER_SAFETY_THRESHOLD
@@ -942,7 +937,7 @@ class RobotController:
                 break
 
     def start_teleoperation(self):
-        """Start teleoperation control loops (followers follow leaders)"""
+        """Start teleoperation control loops (followers follow leaders)."""
         # Create shutdown event for teleoperation
         self._teleop_shutdown = threading.Event()
         self._teleop_threads = []
