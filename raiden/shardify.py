@@ -1,7 +1,7 @@
 """Export converted Raiden episodes to WebDataset sharded .tar format.
 
 Each sample in a shard contains:
-  {uuid}.{cam}_t{idx}.jpg           — camera images at specified time indices
+  {uuid}.{cam}_t{idx}.png           — camera images at specified time indices (lossless PNG)
   {uuid}.lowdim.npz                 — windowed lowdim arrays  (T × D each key)
   {uuid}.metadata.json              — episode / sample metadata
   {uuid}.language_instructions.json — language annotations
@@ -258,25 +258,37 @@ def _load_episode_frames(ep_dir: Path) -> List[Dict[str, Any]]:
     return frames
 
 
-def _load_rgb_jpeg(
+def _load_rgb(
     ep_dir: Path,
     camera_name: str,
     frame_idx: int,
     resize: Optional[Tuple[int, int]],
-    jpeg_quality: int,
-) -> Optional[bytes]:
-    """Return JPEG bytes for a frame, optionally resizing."""
-    path = ep_dir / "rgb" / camera_name / f"{frame_idx:010d}.jpg"
+) -> Optional[tuple[bytes, str]]:
+    """Return (image_bytes, ext) for a frame, optionally resizing.
+
+    When resize is None the raw JPEG bytes from the converter are returned
+    unchanged (single lossy pass, quality set by the converter).  When resize
+    is specified the image is resized with cv2.INTER_LANCZOS4 (matching the
+    server's preprocessing) and encoded as lossless PNG to avoid a second
+    lossy JPEG pass.
+
+    Returns:
+        (bytes, ext) where ext is "jpg" or "png", or None if the file is absent.
+    """
+    path = ep_dir / "rgb" / camera_name / f"{frame_idx:010d}.png"
     if not path.exists():
         return None
     if resize is None:
-        return path.read_bytes()
-    # Resize and re-encode
-    img = Image.open(path)
-    img = img.resize((resize[1], resize[0]), Image.LANCZOS)  # resize is (H, W)
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=jpeg_quality)
-    return buf.getvalue()
+        return path.read_bytes(), "png"
+    # Load as RGB numpy array (PIL JPEG decode), resize with cv2.INTER_LANCZOS4
+    # (matching the server's preprocessing), then encode as lossless PNG.
+    # PNG has no colour-space tag so bytes are written/read as-is; passing RGB
+    # directly means PIL.Image.open on the stored PNG returns correct RGB.
+    img_np = np.array(Image.open(path))  # H W 3, RGB uint8
+    h_out, w_out = resize
+    img_np = cv2.resize(img_np, (w_out, h_out), interpolation=cv2.INTER_LANCZOS4)
+    _, buf = cv2.imencode(".png", img_np)
+    return bytes(buf), "png"
 
 
 def _load_depth_png(ep_dir: Path, camera_name: str, frame_idx: int) -> Optional[bytes]:
@@ -634,7 +646,7 @@ def _write_preprocessing_config(
         "filter_still_samples": config.filter_still_samples,
         "future_lowdim_steps": config.future_lowdim_steps,
         "image_indices": list(config.image_indices),
-        "jpeg_quality": config.jpeg_quality,
+        "image_format": "png",
         "max_episodes_to_process": config.max_episodes_to_process,
         "max_padding_left": config.max_padding_left,
         "max_padding_right": config.max_padding_right,
@@ -925,15 +937,15 @@ def run_shardify(
             abs_frame = _clamp_frame(t + img_idx, n_frames)
             suffix = f"t{img_idx}"
             for src_cam, out_cam in zip(src_cam_names, output_cam_names):
-                rgb = _load_rgb_jpeg(
+                result = _load_rgb(
                     ep_dir,
                     src_cam,
                     abs_frame,
                     config.resize_images_size,
-                    config.jpeg_quality,
                 )
-                if rgb is not None:
-                    sample_files[f"{sample_uuid}.{out_cam}_{suffix}.jpg"] = rgb
+                if result is not None:
+                    rgb, img_ext = result
+                    sample_files[f"{sample_uuid}.{out_cam}_{suffix}.{img_ext}"] = rgb
                 if config.use_depth:
                     depth = _load_depth_png(ep_dir, src_cam, abs_frame)
                     if depth is not None:

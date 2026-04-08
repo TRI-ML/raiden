@@ -17,8 +17,8 @@ Output layout::
             metadata.json
             rgb/
                 scene_camera/
-                    0000000000.jpg      # JPEG quality >= 90
-                    0000000001.jpg
+                    0000000000.png      # lossless PNG
+                    0000000001.png
                     ...
                 left_wrist_camera/
                     ...
@@ -55,7 +55,7 @@ from raiden._config import CAMERA_CONFIG
 from raiden.camera_config import CameraConfig
 
 _SEQUENCE_NAME = "0000"
-_JPG_QUALITY = 90
+_IMG_EXT = ".png"
 
 # Cameras whose images are physically mounted upside-down and need a 180° correction.
 _FLIP_CAMERAS = {"right_wrist_camera"}
@@ -266,11 +266,7 @@ def _extract_svo2_synchronized(
             flip = flip_map[name]
 
             color = cv2.rotate(frame.color, cv2.ROTATE_180) if flip else frame.color
-            cv2.imwrite(
-                str(rgb_dir_map[name] / f"{frame_idx:010d}.jpg"),
-                color,
-                [cv2.IMWRITE_JPEG_QUALITY, _JPG_QUALITY],
-            )
+            cv2.imwrite(str(rgb_dir_map[name] / f"{frame_idx:010d}{_IMG_EXT}"), color)
 
             if use_learned_stereo:
                 fx, baseline = stereo_calib[name]
@@ -361,11 +357,7 @@ def _extract_bag(
         frame = camera.get_frame()
 
         color = cv2.rotate(frame.color, cv2.ROTATE_180) if flip else frame.color
-        cv2.imwrite(
-            str(rgb_dir / f"{idx:010d}.jpg"),
-            color,
-            [cv2.IMWRITE_JPEG_QUALITY, _JPG_QUALITY],
-        )
+        cv2.imwrite(str(rgb_dir / f"{idx:010d}{_IMG_EXT}"), color)
 
         depth_mm = (frame.depth * 1000.0).clip(0, 65535).astype(np.uint16)
         if flip:
@@ -513,7 +505,7 @@ def _apply_camera_trim(
         # higher than destination indices (i), so no conflicts.
         for i in range(n_new):
             src = start_idx + i
-            for d, ext in ((rgb_dir, ".jpg"), (depth_dir, ".npz")):
+            for d, ext in ((rgb_dir, _IMG_EXT), (depth_dir, ".npz")):
                 src_f = d / f"{src:010d}{ext}"
                 dst_f = d / f"{i:010d}{ext}"
                 if src_f.exists():
@@ -885,7 +877,7 @@ def _build_sequence_metadata(
             "prompt": [rec_meta.get("task_instruction", "")],
         },
         "num_frames": max(frame_counts.values()) if frame_counts else 0,
-        "rgb": {"extension": "jpg"},
+        "rgb": {"extension": "png"},
         "depth": {"extension": "npz", "sparse": False, "metric": True},
         "intrinsics": {"model": "pinhole"},
         "extrinsics": {"transform": "cam2world", "metric": True},
@@ -1172,7 +1164,7 @@ def convert_recording(
             rgb_dir = seq_dir / "rgb" / name
             depth_dir = seq_dir / "depth" / name
             for idx in range(n_min, n_min + 100):  # clean up any trailing extras
-                for d, ext in ((rgb_dir, ".jpg"), (depth_dir, ".npz")):
+                for d, ext in ((rgb_dir, _IMG_EXT), (depth_dir, ".npz")):
                     f = d / f"{idx:010d}{ext}"
                     if f.exists():
                         f.unlink()

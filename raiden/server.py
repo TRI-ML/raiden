@@ -310,12 +310,12 @@ class RaidenPolicyServer(chiral.PolicyServer):
         self._open_cameras()
         self._prepare_camera_transforms()
 
-        # Per-camera frame timestamps (Unix ns) updated by capture loops, plus
-        # one-time phase offsets computed at startup so all cameras share a common
-        # time axis.  ZED cameras use the SDK hardware clock; RealSense uses
-        # time.time_ns() recorded immediately after wait_for_frames().
-        # Initialised before threads start.
-        self._cam_arrival_ts_ns: dict[str, int] = {
+        # Per-camera capture timestamps (Unix ns) updated by capture loops.
+        # ZED cameras use sl.TIME_REFERENCE.IMAGE (hardware capture time).
+        # RealSense uses time.time_ns() recorded immediately after wait_for_frames().
+        # Used as the reference for proprio interpolation, matching converter's
+        # timestamps.npy.  Initialised before threads start.
+        self._cam_capture_ts_ns: dict[str, int] = {
             name: 0 for name in self._cam_handles
         }
         self._cam_ts_locks: dict[str, threading.Lock] = {
@@ -699,11 +699,11 @@ class RaidenPolicyServer(chiral.PolicyServer):
         """Block until every camera loop has delivered at least one frame."""
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
-            if all(self._cam_arrival_ts_ns.get(n, 0) > 0 for n in self._cam_handles):
+            if all(self._cam_capture_ts_ns.get(n, 0) > 0 for n in self._cam_handles):
                 return
             time.sleep(0.05)
         missing = [
-            n for n in self._cam_handles if self._cam_arrival_ts_ns.get(n, 0) == 0
+            n for n in self._cam_handles if self._cam_capture_ts_ns.get(n, 0) == 0
         ]
         print(
             f"  Warning: cameras did not produce a first frame within {timeout_s:.0f}s: {missing}"
@@ -726,7 +726,7 @@ class RaidenPolicyServer(chiral.PolicyServer):
         arrival_ns: dict[str, int] = {}
         for name in names:
             with self._cam_ts_locks[name]:
-                arrival_ns[name] = self._cam_arrival_ts_ns[name]
+                arrival_ns[name] = self._cam_capture_ts_ns[name]
 
         ref_name = self._get_reference_camera()
         ref_ts = arrival_ns.get(ref_name, 0)
@@ -946,15 +946,17 @@ class RaidenPolicyServer(chiral.PolicyServer):
         # Reference timestamp: the reference camera's arrival time shifted onto
         # the unified time axis (arrival_ts + phase_offset).
         ref_cam = self._get_reference_camera()
-        if ref_cam and self._cam_arrival_ts_ns.get(ref_cam, 0) > 0:
+        if ref_cam and self._cam_capture_ts_ns.get(ref_cam, 0) > 0:
             with self._cam_ts_locks[ref_cam]:
-                ref_ts_ns = self._cam_arrival_ts_ns[
+                ref_ts_ns = self._cam_capture_ts_ns[
                     ref_cam
                 ] + self._cam_phase_offset_ns.get(ref_cam, 0)
         else:
             ref_ts_ns = self._get_zed_current_time_ns()
 
-        # Interpolate joint positions to reference timestamp for FK.
+        # Interpolate joint positions to the reference camera timestamp — matches
+        # the converter which uses the first camera's timestamps.npy as ref_ts
+        # for all proprio interpolation (joints and FK).
         q_r = self._interpolate_proprio("follower_r_joint_pos", ref_ts_ns)
         q_l = self._interpolate_proprio("follower_l_joint_pos", ref_ts_ns)
 
@@ -970,7 +972,7 @@ class RaidenPolicyServer(chiral.PolicyServer):
                 image = self.images[c.name].copy()
                 depth = self.depths[c.name].copy() if c.name in self.depths else None
                 intrinsics = self.intrinsics[c.name].copy()
-                cam_ts = self._image_timestamps[c.name]
+                cam_ts = self._cam_capture_ts_ns[c.name]
 
             cameras.append(
                 CameraInfo(
@@ -1241,7 +1243,7 @@ class RaidenPolicyServer(chiral.PolicyServer):
                     )
                 self.update_image(name, color_bgr[..., ::-1].copy())
                 with self._cam_ts_locks[name]:
-                    self._cam_arrival_ts_ns[name] = frame_ts_ns
+                    self._cam_capture_ts_ns[name] = frame_ts_ns
 
     def _realsense_capture_loop(self, name: str, handle: dict, flip: bool) -> None:
         pipeline = handle["pipeline"]
@@ -1280,7 +1282,7 @@ class RaidenPolicyServer(chiral.PolicyServer):
                 if name in self.depths:
                     self.update_depth(name, depth)
                 with self._cam_ts_locks[name]:
-                    self._cam_arrival_ts_ns[name] = frame_ts_ns
+                    self._cam_capture_ts_ns[name] = frame_ts_ns
             except RuntimeError:
                 time.sleep(0.01)
 
