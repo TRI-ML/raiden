@@ -92,6 +92,12 @@ rd record --data-dir /mnt/storage/robot_data
 
 Episodes are written to `<data-dir>/raw/<task_name>/`.
 
+!!! warning "Gripper — Risk of Mechanical Damage"
+    The follower gripper position is mapped directly from the leader trigger
+    (0 → open, 1 → closed).  **Fully depressing the trigger drives the fingers
+    to their hard stop and can break the gripper.**  Do not hold the trigger
+    fully depressed.  See [Safety](safety.md#gripper-control) for details.
+
 During the session:
 
 - Press the **button on any leader arm** to start an episode; press it again

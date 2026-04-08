@@ -9,6 +9,16 @@
     physical barriers, trained operators, and compliance with all applicable
     safety regulations.
 
+## Gripper Control
+
+!!! warning "Gripper — Risk of Mechanical Damage"
+    During leader-follower teleoperation the follower gripper position is
+    controlled by mapping the leader trigger encoder **directly** (0 → fully
+    open, 1 → fully closed) to the follower gripper.  **Commanding a value of
+    1.0 (trigger fully depressed) drives the gripper fingers to their hard stop
+    and can break the gripper fingers.**  Do not hold the trigger fully
+    depressed.
+
 ## Soft E-Stop
 
 Raiden supports an optional USB foot switch as a soft emergency stop during

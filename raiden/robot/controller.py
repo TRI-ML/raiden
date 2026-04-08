@@ -31,6 +31,7 @@ from i2rt.robots.motor_chain_robot import MotorChainRobot  # noqa: E402
 from i2rt.robots.robot import Robot  # noqa: E402
 from i2rt.robots.utils import ARM_YAM_XML_PATH as _ARM_YAM_XML_PATH  # noqa: E402
 from i2rt.robots.utils import GripperType  # noqa: E402
+
 from raiden.robot._jparse import jparse_step  # noqa: E402
 from raiden.robot.footpedal import try_open_footpedal  # noqa: E402
 
@@ -918,14 +919,7 @@ class RobotController:
                 leader.command_joint_pos(leader_pos[:6])
 
                 # Gripper control: map leader encoder (0–1) directly to follower.
-                # Safety clamp prevents closing further when fingers are blocked.
-                follower_gripper_actual = follower.get_joint_pos()[6]
                 follower_gripper_cmd = float(np.clip(leader_pos[6], 0.0, 1.0))
-                if (
-                    follower_gripper_actual - follower_gripper_cmd
-                    > _GRIPPER_SAFETY_THRESHOLD
-                ):
-                    follower_gripper_cmd = follower_gripper_actual
                 follower_cmd = np.append(leader_pos[:6], follower_gripper_cmd)
 
                 follower.command_joint_pos(follower_cmd)
