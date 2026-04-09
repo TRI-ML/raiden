@@ -83,7 +83,7 @@ class ShardifyConfig:
 
     # Output
     samples_per_shard: int = 100
-    num_workers: int = 1
+    num_workers: int = 8
 
     #: Maximum samples kept per stat key for percentile estimation.
     stats_reservoir_size: int = 50_000

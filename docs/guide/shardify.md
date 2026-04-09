@@ -47,7 +47,7 @@ sample is identified by a UUID and consists of four file types:
 
 | File | Description |
 |---|---|
-| `{uuid}.{cam}_t{idx}.jpg` | RGB image at raw frame offset `idx` from the anchor (`t-1`, `t0`, etc.) |
+| `{uuid}.{cam}_t{idx}.png` | RGB image at raw frame offset `idx` from the anchor (`t-1`, `t0`, etc.) — lossless PNG |
 | `{uuid}.{cam}_t{idx}.depth.png` | Depth map at the same offset — 16-bit greyscale PNG, values in millimetres |
 | `{uuid}.lowdim.npz` | Windowed arrays of shape `(T, D)` per key (see below) |
 | `{uuid}.metadata.json` | Per-sample metadata (episode ID, anchor timestep, padding, …) |
@@ -232,13 +232,12 @@ chain: env vars, `~/.aws/credentials`, instance profile, etc.).
 | `--max-padding-left` | `3` | Max allowed left padding |
 | `--max-padding-right` | `15` | Max allowed right padding |
 | `--samples-per-shard` | `100` | Samples per `.tar` file |
-| `--jpeg-quality` | `95` | JPEG quality for re-encoded images |
-| `--resize-images` | `384x384` | Resize images to `HxW` before storing |
+| `--resize-images` | `384x384` | Resize images to `HxW` before storing (Lanczos) |
 | `--filter-still-samples` | off | Skip samples where neither arm moves |
 | `--still-threshold` | `0.05` | Max EE movement (m) to consider a sample still |
 | `--fail-on-nan` | on | Raise an error if NaN values are found |
 | `--stride` | `3` | Lowdim/action window step spacing in raw frames (3=10 Hz, 1=30 Hz). Does not affect anchor density or image offsets. |
 | `--max-episodes` | `-1` (all) | Limit number of episodes processed |
-| `--num-workers` | `1` | Number of worker processes |
+| `--num-workers` | `8` | Number of parallel workers for sample building |
 
 Run `rd shardify --help` for the full list.
