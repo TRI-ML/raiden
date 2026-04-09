@@ -267,28 +267,25 @@ def _load_rgb(
 ) -> Optional[tuple[bytes, str]]:
     """Return (image_bytes, ext) for a frame, optionally resizing.
 
-    When resize is None the raw JPEG bytes from the converter are returned
-    unchanged (single lossy pass, quality set by the converter).  When resize
-    is specified the image is resized with cv2.INTER_LANCZOS4 (matching the
-    server's preprocessing) and encoded as lossless PNG to avoid a second
-    lossy JPEG pass.
+    The converter saves frames with ``cv2.imwrite``, so on-disk PNGs are in BGR
+    order.  This function always returns **RGB** PNG bytes so that training
+    dataloaders using PIL (WebDataset default) receive correct colours.
 
     Returns:
-        (bytes, ext) where ext is "jpg" or "png", or None if the file is absent.
+        (bytes, "png"), or None if the file is absent.
     """
     path = ep_dir / "rgb" / camera_name / f"{frame_idx:010d}.png"
     if not path.exists():
         return None
-    if resize is None:
-        return path.read_bytes(), "png"
-    # Load as RGB numpy array (PIL JPEG decode), resize with cv2.INTER_LANCZOS4
-    # (matching the server's preprocessing), then encode as lossless PNG.
-    # PNG has no colour-space tag so bytes are written/read as-is; passing RGB
-    # directly means PIL.Image.open on the stored PNG returns correct RGB.
-    img_np = np.array(Image.open(path))  # H W 3, RGB uint8
-    h_out, w_out = resize
-    img_np = cv2.resize(img_np, (w_out, h_out), interpolation=cv2.INTER_LANCZOS4)
-    _, buf = cv2.imencode(".png", img_np)
+    # cv2.imread gives BGR; flip to RGB for lossless PNG storage.
+    img_bgr = cv2.imread(str(path))
+    if img_bgr is None:
+        return None
+    img_rgb = img_bgr[..., ::-1]  # BGR → RGB
+    if resize is not None:
+        h_out, w_out = resize
+        img_rgb = cv2.resize(img_rgb, (w_out, h_out), interpolation=cv2.INTER_LANCZOS4)
+    _, buf = cv2.imencode(".png", img_rgb)
     return bytes(buf), "png"
 
 
