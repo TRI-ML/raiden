@@ -1048,7 +1048,7 @@ def convert_recording(
     if svo2_all_done:
         for name in svo2_names:
             rgb_dir = seq_dir / "rgb" / name
-            n = len(list(rgb_dir.glob("*.jpg")))
+            n = len(list(rgb_dir.glob("*.png")))
             print(f"  Skipping {name} (already extracted, {n} frames)")
             frame_counts[name] = n
             camera_infos[name] = None
@@ -1060,7 +1060,7 @@ def convert_recording(
             name = svo_path.stem
             rgb_dir_check = seq_dir / "rgb" / name
             if rgb_dir_check.exists():
-                pre_counts[name] = len(list(rgb_dir_check.glob("*.jpg")))
+                pre_counts[name] = len(list(rgb_dir_check.glob("*.png")))
             else:
                 print(f"  Pre-scanning {svo_path.name} ...")
                 pre_counts[name] = _count_svo2_frames(svo_path)
@@ -1106,7 +1106,7 @@ def convert_recording(
         depth_dir = seq_dir / "depth" / name
 
         if rgb_dir.exists():
-            n = len(list(rgb_dir.glob("*.jpg")))
+            n = len(list(rgb_dir.glob("*.png")))
             print(f"  Skipping {name} (already extracted, {n} frames)")
             frame_counts[name] = n
             camera_infos[name] = None

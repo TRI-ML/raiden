@@ -176,7 +176,7 @@ def visualize_recording(
 
     rgb_dir = ep_dir / "rgb"
     counts = [
-        len(sorted((rgb_dir / cam).glob("*.jpg")))
+        len(sorted((rgb_dir / cam).glob("*.png")))
         for cam in cam_names
         if (rgb_dir / cam).exists()
     ]
@@ -319,7 +319,7 @@ def visualize_recording(
             # RGB: load + downscale
             # ------------------------------------------------------------------
             img_rgb = None
-            rgb_path = ep_dir / "rgb" / cam_name / f"{frame_name}.jpg"
+            rgb_path = ep_dir / "rgb" / cam_name / f"{frame_name}.png"
             if rgb_path.exists():
                 img_bgr = cv2.imread(str(rgb_path))
                 if img_bgr is not None:
