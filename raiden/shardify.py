@@ -24,6 +24,7 @@ import sys
 import tarfile
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -746,6 +747,132 @@ def select_processed_task(data_dir: str = "data") -> List[Tuple[Path, List[Path]
 # ---------------------------------------------------------------------------
 
 
+def _build_sample(
+    args: tuple,
+) -> Dict[str, Any]:
+    """Build one sample for the shard writer (runs in a worker thread).
+
+    Args:
+        args: (ctx, t, config, output_cam_names) — packed as a tuple so
+            ThreadPoolExecutor.map can call this as a plain function.
+
+    Returns:
+        A dict with key ``"filtered"`` set to ``"padding"``, ``"still"``, or
+        ``"nan"`` when the sample is dropped, or ``None`` when it should be
+        written.  Kept samples also carry ``"sample_files"``, ``"lowdim"``,
+        ``"episode_id"``, and ``"lang"`` keys.
+    """
+    ctx, t, config, output_cam_names = args
+    frames = ctx["frames"]
+    n_frames = ctx["n_frames"]
+    src_cam_names = ctx["src_cam_names"]
+    episode_id = ctx["episode_id"]
+    language_task = ctx["language_task"]
+    language_prompt = ctx["language_prompt"]
+    control = ctx["control"]
+    ep_dir = ctx["ep_dir"]
+    s = config.stride
+
+    # ── padding filter ────────────────────────────────────────────────
+    left_frames_needed = config.past_lowdim_steps * s
+    right_frames_needed = config.future_lowdim_steps * s
+    left_pad = max(0, -(-max(0, left_frames_needed - t) // s))
+    right_pad = max(0, -(-max(0, right_frames_needed - (n_frames - 1 - t)) // s))
+    if left_pad > config.max_padding_left or right_pad > config.max_padding_right:
+        return {"filtered": "padding"}
+
+    # ── still-sample filter ───────────────────────────────────────────
+    if config.filter_still_samples:
+        window_actions = np.stack(
+            [
+                np.asarray(
+                    frames[_clamp_frame(t + o, n_frames)].get("action", np.zeros(26)),
+                    dtype=np.float32,
+                )
+                for o in range(
+                    -config.past_lowdim_steps, config.future_lowdim_steps + 1
+                )
+            ]
+        )
+        if _is_still(window_actions, config.past_lowdim_steps, config.still_threshold):
+            return {"filtered": "still"}
+
+    # ── build lowdim arrays ───────────────────────────────────────────
+    lowdim = _build_window_arrays(frames, t, config, output_cam_names)
+
+    # ── NaN check ─────────────────────────────────────────────────────
+    if config.fail_on_nan:
+        for key, arr in lowdim.items():
+            if isinstance(arr, np.ndarray) and arr.dtype.kind == "f":
+                if np.isnan(arr).any():
+                    raise ValueError(
+                        f"NaN in key '{key}' at episode {episode_id} frame {t}"
+                    )
+    else:
+        if any(
+            isinstance(arr, np.ndarray)
+            and arr.dtype.kind == "f"
+            and np.isnan(arr).any()
+            for arr in lowdim.values()
+        ):
+            return {"filtered": "nan"}
+
+    # ── images ────────────────────────────────────────────────────────
+    sample_files: Dict[str, bytes] = {}
+    sample_uuid = str(uuid.uuid4())
+
+    for img_idx in config.image_indices:
+        abs_frame = _clamp_frame(t + img_idx, n_frames)
+        suffix = f"t{img_idx}"
+        for src_cam, out_cam in zip(src_cam_names, output_cam_names):
+            result = _load_rgb(ep_dir, src_cam, abs_frame, config.resize_images_size)
+            if result is not None:
+                rgb, img_ext = result
+                sample_files[f"{sample_uuid}.{out_cam}_{suffix}.{img_ext}"] = rgb
+            if config.use_depth:
+                depth = _load_depth_png(ep_dir, src_cam, abs_frame)
+                if depth is not None:
+                    sample_files[
+                        f"{sample_uuid}.{out_cam}_{suffix}.depth.png"
+                    ] = depth
+
+    # ── serialize lowdim ──────────────────────────────────────────────
+    buf = io.BytesIO()
+    np.savez_compressed(buf, **lowdim)
+    sample_files[f"{sample_uuid}.lowdim.npz"] = buf.getvalue()
+
+    # ── metadata.json ─────────────────────────────────────────────────
+    img_ts = [_clamp_frame(t + i, n_frames) for i in config.image_indices]
+    sample_meta = {
+        "episode_id": episode_id,
+        "sample_id": f"{sample_uuid}_{episode_id}_t{t:04d}",
+        "anchor_timestep": t,
+        "anchor_relative_idx": config.past_lowdim_steps,
+        "image_timesteps": img_ts,
+        "lowdim_start_timestep": max(0, t - config.past_lowdim_steps),
+        "lowdim_end_timestep": min(n_frames - 1, t + config.future_lowdim_steps),
+        "past_padding": int(left_pad),
+        "future_padding": int(right_pad),
+        "camera_names": output_cam_names,
+        "original_episode_length": n_frames,
+        "is_padded": left_pad > 0 or right_pad > 0,
+        "control": control,
+    }
+    sample_files[f"{sample_uuid}.metadata.json"] = json.dumps(sample_meta).encode()
+
+    lang = {"original": [language_prompt or language_task]}
+    sample_files[f"{sample_uuid}.language_instructions.json"] = json.dumps(
+        lang
+    ).encode()
+
+    return {
+        "filtered": None,
+        "sample_files": sample_files,
+        "lowdim": lowdim,
+        "episode_id": episode_id,
+    }
+
+
 def run_shardify(
     episode_dirs: List[Path],
     config: ShardifyConfig,
@@ -864,152 +991,52 @@ def run_shardify(
     )
 
     ep_sample_counts: Dict[str, int] = {}
-    pbar = tqdm(all_work, unit="anchor", dynamic_ncols=True)
-    for ctx, t in pbar:
-        ep_dir = ctx["ep_dir"]
-        frames = ctx["frames"]
-        n_frames = ctx["n_frames"]
-        src_cam_names = ctx["src_cam_names"]
-        language_task = ctx["language_task"]
-        language_prompt = ctx["language_prompt"]
-        episode_id = ctx["episode_id"]
-        control = ctx["control"]
-        s = config.stride
-        # Count padding in lowdim-step units (ceiling division).
-        left_frames_needed = config.past_lowdim_steps * s
-        right_frames_needed = config.future_lowdim_steps * s
-        left_pad = max(0, -(-max(0, left_frames_needed - t) // s))
-        right_pad = max(0, -(-max(0, right_frames_needed - (n_frames - 1 - t)) // s))
 
-        if left_pad > config.max_padding_left or right_pad > config.max_padding_right:
-            filtered_padding += 1
-            continue
-
-        # ── still-sample filter ──────────────────────────────────────
-        if config.filter_still_samples:
-            window_actions = np.stack(
-                [
-                    np.asarray(
-                        frames[_clamp_frame(t + o, n_frames)].get(
-                            "action", np.zeros(26)
-                        ),
-                        dtype=np.float32,
-                    )
-                    for o in range(
-                        -config.past_lowdim_steps, config.future_lowdim_steps + 1
-                    )
-                ]
-            )
-            if _is_still(
-                window_actions, config.past_lowdim_steps, config.still_threshold
-            ):
-                filtered_still += 1
-                continue
-
-        # ── build lowdim arrays ──────────────────────────────────────
-        lowdim = _build_window_arrays(frames, t, config, output_cam_names)
-
-        # ── NaN check ────────────────────────────────────────────────
-        if config.fail_on_nan:
-            for key, arr in lowdim.items():
-                if isinstance(arr, np.ndarray) and arr.dtype.kind == "f":
-                    if np.isnan(arr).any():
-                        raise ValueError(
-                            f"NaN detected in key '{key}' at episode {ep_dir.name} frame {t}"
-                        )
-        else:
-            has_nan = any(
-                isinstance(arr, np.ndarray)
-                and arr.dtype.kind == "f"
-                and np.isnan(arr).any()
-                for arr in lowdim.values()
-            )
-            if has_nan:
-                filtered_nan += 1
-                continue
-
-        # ── images ───────────────────────────────────────────────────
-        sample_files: Dict[str, bytes] = {}
-        sample_uuid = str(uuid.uuid4())
-
-        for img_idx in config.image_indices:
-            # image_indices are in raw frame units (not stride-scaled).
-            abs_frame = _clamp_frame(t + img_idx, n_frames)
-            suffix = f"t{img_idx}"
-            for src_cam, out_cam in zip(src_cam_names, output_cam_names):
-                result = _load_rgb(
-                    ep_dir,
-                    src_cam,
-                    abs_frame,
-                    config.resize_images_size,
-                )
-                if result is not None:
-                    rgb, img_ext = result
-                    sample_files[f"{sample_uuid}.{out_cam}_{suffix}.{img_ext}"] = rgb
-                if config.use_depth:
-                    depth = _load_depth_png(ep_dir, src_cam, abs_frame)
-                    if depth is not None:
-                        sample_files[f"{sample_uuid}.{out_cam}_{suffix}.depth.png"] = (
-                            depth
-                        )
-
-        # ── serialize lowdim ─────────────────────────────────────────
-        buf = io.BytesIO()
-        np.savez_compressed(buf, **lowdim)
-        sample_files[f"{sample_uuid}.lowdim.npz"] = buf.getvalue()
-
-        # ── metadata.json ────────────────────────────────────────────
-        img_ts = [_clamp_frame(t + i, n_frames) for i in config.image_indices]
-        sample_meta = {
-            "episode_id": episode_id,
-            "sample_id": f"{sample_uuid}_{episode_id}_t{t:04d}",
-            "anchor_timestep": t,
-            "anchor_relative_idx": config.past_lowdim_steps,
-            "image_timesteps": img_ts,
-            "lowdim_start_timestep": max(0, t - config.past_lowdim_steps),
-            "lowdim_end_timestep": min(n_frames - 1, t + config.future_lowdim_steps),
-            "past_padding": int(left_pad),
-            "future_padding": int(right_pad),
-            "camera_names": output_cam_names,
-            "original_episode_length": n_frames,
-            "is_padded": left_pad > 0 or right_pad > 0,
-            "control": control,
-        }
-        sample_files[f"{sample_uuid}.metadata.json"] = json.dumps(sample_meta).encode()
-
-        # ── language_instructions.json ───────────────────────────────
-        lang = {"original": [language_prompt or language_task]}
-        sample_files[f"{sample_uuid}.language_instructions.json"] = json.dumps(
-            lang
-        ).encode()
-
-        writer.add(sample_files)
-        total_samples += 1
-        ep_sample_counts[episode_id] = ep_sample_counts.get(episode_id, 0) + 1
-        stats_counter += 1
-        pbar.set_postfix(
-            filtered=filtered_padding + filtered_still + filtered_nan,
-            shard=writer._shard_idx,
+    work_args = [(ctx, t, config, output_cam_names) for ctx, t in all_work]
+    with ThreadPoolExecutor(max_workers=config.num_workers) as executor:
+        pbar = tqdm(
+            executor.map(_build_sample, work_args),
+            total=len(work_args),
+            unit="anchor",
+            dynamic_ncols=True,
         )
+        for result in pbar:
+            if result["filtered"] == "padding":
+                filtered_padding += 1
+            elif result["filtered"] == "still":
+                filtered_still += 1
+            elif result["filtered"] == "nan":
+                filtered_nan += 1
+            else:
+                writer.add(result["sample_files"])
+                total_samples += 1
+                episode_id = result["episode_id"]
+                ep_sample_counts[episode_id] = ep_sample_counts.get(episode_id, 0) + 1
+                stats_counter += 1
+                pbar.set_postfix(
+                    filtered=filtered_padding + filtered_still + filtered_nan,
+                    shard=writer._shard_idx,
+                )
 
-        # ── accumulate stats (every stats_stride samples) ─────────────
-        if stats_counter % config.stats_stride == 0:
-            for key, arr in lowdim.items():
-                if not isinstance(arr, np.ndarray):
-                    continue
-                if arr.dtype == bool or arr.ndim < 2:
-                    continue
-                if key.startswith("intrinsics.") or key.startswith("extrinsics."):
-                    continue
-                sample_arr = arr.reshape(T, -1).astype(np.float32)
-                D = sample_arr.shape[1]
-                if key not in stats_accumulators:
-                    stats_accumulators[key] = _StatsAccumulator(
-                        T, D, config.stats_reservoir_size
-                    )
-                stats_accumulators[key].update(sample_arr)
-
-    pbar.close()
+                # ── accumulate stats (every stats_stride samples) ──────
+                if stats_counter % config.stats_stride == 0:
+                    lowdim = result["lowdim"]
+                    for key, arr in lowdim.items():
+                        if not isinstance(arr, np.ndarray):
+                            continue
+                        if arr.dtype == bool or arr.ndim < 2:
+                            continue
+                        if key.startswith("intrinsics.") or key.startswith(
+                            "extrinsics."
+                        ):
+                            continue
+                        sample_arr = arr.reshape(T, -1).astype(np.float32)
+                        D = sample_arr.shape[1]
+                        if key not in stats_accumulators:
+                            stats_accumulators[key] = _StatsAccumulator(
+                                T, D, config.stats_reservoir_size
+                            )
+                        stats_accumulators[key].update(sample_arr)
 
     print("\nSamples per episode:")
     for ep_id, count in sorted(ep_sample_counts.items()):
