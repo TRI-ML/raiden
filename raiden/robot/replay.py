@@ -446,8 +446,9 @@ def _stream_trajectories(
     log_every = max(1, control_hz // 30)  # downsample to ~30 Hz for Rerun
 
     if visualize:
-        import rerun as rr
         from urllib.parse import quote
+
+        import rerun as rr
 
         rr.init("raiden_replay")
         grpc_port = 9878

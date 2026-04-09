@@ -52,7 +52,7 @@ import numpy as np
 from chiral.types import CameraInfo, Observation
 
 from raiden.camera_config import CameraConfig as RaidenCameraConfig
-from raiden.robot.controller import RobotController, smooth_move_joints
+from raiden.robot.controller import RobotController
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -103,29 +103,42 @@ _DEFAULT_MAX_JOINT_DELTA = 0.2  # radians
 
 _CONTROL_HZ = 10.0
 
-# Thread-local MuJoCo kinematics instances.
+# Per-arm Kinematics instances, each protected by its own lock.
 #
 # Kinematics.fk() and Kinematics.ik() both call
 # self._configuration.update(q) which modifies the mink.Configuration
-# in-place.  Using a single global instance causes FK in _make_obs() to
-# race with IK in _ee_pose_to_joint_cmd() when the asyncio event-loop
-# submits both to the thread-pool executor concurrently, corrupting the
-# configuration and returning wrong poses / joint solutions.
-#
-# Using threading.local() gives every worker thread its own Kinematics
-# object, eliminating all cross-thread state.
-_kin_tls: threading.local = threading.local()
+# in-place, and the IK solver may carry internal warm-start state between
+# calls.  Using one instance per arm ensures that the left-arm IK solution
+# never contaminates the right-arm IK starting state (and vice versa).
+# Each lock serializes concurrent FK/IK calls on that arm.
+_kin_l: Any = None
+_kin_r: Any = None
+_kin_l_lock: threading.Lock = threading.Lock()
+_kin_r_lock: threading.Lock = threading.Lock()
 
 
-def _get_kinematics() -> Any:
-    """Return the calling thread's Kinematics instance (created on first use)."""
-    if not hasattr(_kin_tls, "kinematics"):
-        from i2rt.robots.kinematics import Kinematics
+def _make_kinematics() -> Any:
+    from i2rt.robots.kinematics import Kinematics
 
-        from raiden._xml_paths import get_yam_4310_linear_xml_path
+    from raiden._xml_paths import get_yam_4310_linear_xml_path
 
-        _kin_tls.kinematics = Kinematics(get_yam_4310_linear_xml_path(), "grasp_site")
-    return _kin_tls.kinematics
+    return Kinematics(get_yam_4310_linear_xml_path(), "grasp_site")
+
+
+def _get_kin_l() -> Any:
+    """Return the left-arm Kinematics instance (caller must hold _kin_l_lock)."""
+    global _kin_l
+    if _kin_l is None:
+        _kin_l = _make_kinematics()
+    return _kin_l
+
+
+def _get_kin_r() -> Any:
+    """Return the right-arm Kinematics instance (caller must hold _kin_r_lock)."""
+    global _kin_r
+    if _kin_r is None:
+        _kin_r = _make_kinematics()
+    return _kin_r
 
 
 def _rot6d_to_mat(v: np.ndarray) -> np.ndarray:
@@ -638,14 +651,15 @@ class RaidenPolicyServer(chiral.PolicyServer):
         # Safety check: abort if any joint delta exceeds the threshold.
         self._check_joint_delta(joint_cmd)
 
-        prev_cmd = self._last_joint_cmd
         self._last_joint_cmd = joint_cmd
 
         # Submit to the smooth executor.  max_workers=1 serialises commands:
         # smooth_N completes before smooth_N+1 starts, so the robot always
         # moves cleanly from one target to the next without abrupt stops.
+        # init_cmd (captured before the IK await) is used as the smooth start
+        # to avoid a stale re-read of _last_joint_cmd after the await.
         self._pending_smooth = self._smooth_executor.submit(
-            self._smooth_command, prev_cmd, joint_cmd
+            self._smooth_command, init_cmd, joint_cmd
         )
 
         step_ms = (time.perf_counter() - t0) * 1e3
@@ -793,8 +807,6 @@ class RaidenPolicyServer(chiral.PolicyServer):
             (14,) float32 joint command — left arm first, then right arm,
             matching the joint action convention expected by ``step()``.
         """
-        kin = _get_kinematics()
-
         # action layout: [l_xyz(3), r_xyz(3), l_rot6d(6), r_rot6d(6), l_grip(1), r_grip(1)]
         T_l = _pose_from_xyz_rot6d(action[0:3], action[6:12])
         l_grip = float(action[18])
@@ -808,30 +820,62 @@ class RaidenPolicyServer(chiral.PolicyServer):
         # Seed IK from the last *commanded* joint positions so the solver starts
         # from the target the robot is moving toward rather than the mid-motion
         # measured position, which is less stable and may slow convergence.
-        # Falls back to proprioception on the very first step.
-        nq = kin._configuration.model.nq
+        # On the very first step (init_cmd is None), seed with zeros so IK starts
+        # from the neutral configuration rather than whatever configuration was
+        # left by the most recent FK call.
         if init_cmd is not None:
-            q_l_prop: Optional[np.ndarray] = init_cmd[:DOF]
-            q_r_prop: Optional[np.ndarray] = init_cmd[DOF : DOF * 2]
+            q_l_seed: Optional[np.ndarray] = init_cmd[:DOF]
+            q_r_seed: Optional[np.ndarray] = init_cmd[DOF : DOF * 2]
         else:
-            q_l_prop = self._read_proprio("follower_l_joint_pos")
-            q_r_prop = self._read_proprio("follower_r_joint_pos")
+            q_l_seed = None
+            q_r_seed = None
 
-        def _pad_init(q7: Optional[np.ndarray]) -> Optional[np.ndarray]:
-            if q7 is None:
-                return None
-            q = np.zeros(nq, dtype=np.float64)
-            q[:6] = q7[:6]
-            return q
+        with _kin_l_lock:
+            kin_l = _get_kin_l()
+            nq = kin_l._configuration.model.nq
 
-        _, q_l_full = kin.ik(T_l, "grasp_site", init_q=_pad_init(q_l_prop))
-        cmd_l = np.append(q_l_full[:6], l_grip).astype(np.float32)
+            def _pad_init(q7: Optional[np.ndarray]) -> np.ndarray:
+                q = np.zeros(nq, dtype=np.float64)
+                if q7 is not None:
+                    q[:6] = q7[:6]
+                return q
+
+            ok_l, q_l_full = kin_l.ik(T_l, "grasp_site", init_q=_pad_init(q_l_seed))
+            T_l_fk = kin_l.fk(q_l_full)
+            cmd_l = np.append(q_l_full[:6], l_grip).astype(np.float32)
 
         if T_r is not None:
-            _, q_r_full = kin.ik(T_r, "grasp_site", init_q=_pad_init(q_r_prop))
-            cmd_r = np.append(q_r_full[:6], r_grip).astype(np.float32)
+            with _kin_r_lock:
+                kin_r = _get_kin_r()
+                nq_r = kin_r._configuration.model.nq
+
+                def _pad_init_r(q7: Optional[np.ndarray]) -> np.ndarray:
+                    q = np.zeros(nq_r, dtype=np.float64)
+                    if q7 is not None:
+                        q[:6] = q7[:6]
+                    return q
+
+                ok_r, q_r_full = kin_r.ik(
+                    T_r, "grasp_site", init_q=_pad_init_r(q_r_seed)
+                )
+                T_r_fk = kin_r.fk(q_r_full)
+                cmd_r = np.append(q_r_full[:6], r_grip).astype(np.float32)
         else:
+            ok_r, T_r_fk = True, None
             cmd_r = np.zeros(DOF, dtype=np.float32)
+
+        # Diagnostic: log IK convergence and round-trip FK error.
+        pos_err_l = float(np.linalg.norm(T_l_fk[:3, 3] - T_l[:3, 3]))
+        print(
+            f"[IK-L] ok={ok_l}  target_xyz={T_l[:3, 3].round(4)}  "
+            f"fk_xyz={T_l_fk[:3, 3].round(4)}  pos_err={pos_err_l * 1000:.2f}mm"
+        )
+        if T_r is not None and T_r_fk is not None:
+            pos_err_r = float(np.linalg.norm(T_r_fk[:3, 3] - T_r[:3, 3]))
+            print(
+                f"[IK-R] ok={ok_r}  target_xyz={T_r[:3, 3].round(4)}  "
+                f"fk_xyz={T_r_fk[:3, 3].round(4)}  pos_err={pos_err_r * 1000:.2f}mm"
+            )
 
         # IK returns full nq — take arm joints only, then append gripper.
         # Output layout: left arm first, then right arm (matches joint action convention).
@@ -846,49 +890,52 @@ class RaidenPolicyServer(chiral.PolicyServer):
     ) -> None:
         """Interpolate from prev_cmd to joint_cmd over one control period.
 
-        Both arms run in parallel threads so neither blocks the other.
-        Interpolates between the previous and current *commanded* targets
-        (not actual positions) to reproduce the same trajectory shape as the
-        training data.
+        Both arms are commanded together in each interpolation step so they
+        stay in sync.  Interpolates between the previous and current
+        *commanded* targets (not actual positions) to reproduce the same
+        trajectory shape as the training data.
 
         Args:
             prev_cmd: Previous commanded joint positions (14,).  ``None`` on the
                 first step — falls back to reading the actual robot position.
             joint_cmd: (14,) float32 — left arm (7) then right arm (7).
         """
-        start_l = prev_cmd[:DOF] if prev_cmd is not None else None
-        start_r = prev_cmd[DOF : DOF * 2] if prev_cmd is not None else None
-        threads = []
-        if self._robot.follower_l:
-            t = threading.Thread(
-                target=smooth_move_joints,
-                args=(self._robot.follower_l, joint_cmd[:DOF]),
-                kwargs={
-                    "start_joint_positions": start_l,
-                    "time_interval_s": 1.0 / _CONTROL_HZ,
-                    "steps": 10,
-                    "stop_event": self._estop_active,
-                },
-                daemon=True,
+        steps = 10
+        dt = (1.0 / _CONTROL_HZ) / steps
+
+        # Read start positions once before the loop.
+        if prev_cmd is not None:
+            start_l = prev_cmd[:DOF].astype(np.float64)
+            start_r = prev_cmd[DOF : DOF * 2].astype(np.float64)
+        else:
+            start_l = (
+                self._robot.follower_l.get_joint_pos().astype(np.float64)
+                if self._robot.follower_l
+                else None
             )
-            threads.append(t)
-        if self._robot.follower_r:
-            t = threading.Thread(
-                target=smooth_move_joints,
-                args=(self._robot.follower_r, joint_cmd[DOF : DOF * 2]),
-                kwargs={
-                    "start_joint_positions": start_r,
-                    "time_interval_s": 1.0 / _CONTROL_HZ,
-                    "steps": 10,
-                    "stop_event": self._estop_active,
-                },
-                daemon=True,
+            start_r = (
+                self._robot.follower_r.get_joint_pos().astype(np.float64)
+                if self._robot.follower_r
+                else None
             )
-            threads.append(t)
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
+
+        target_l = joint_cmd[:DOF].astype(np.float64)
+        target_r = joint_cmd[DOF : DOF * 2].astype(np.float64)
+
+        for i in range(steps + 1):
+            if self._estop_active.is_set():
+                return
+            alpha = i / steps
+            if self._robot.follower_l and start_l is not None:
+                self._robot.follower_l.command_joint_pos(
+                    (1 - alpha) * start_l + alpha * target_l
+                )
+            if self._robot.follower_r and start_r is not None:
+                self._robot.follower_r.command_joint_pos(
+                    (1 - alpha) * start_r + alpha * target_r
+                )
+            if i < steps:
+                time.sleep(dt)
 
     # -------------------------------------------------------------------------
     # Joint-delta safety check
@@ -936,7 +983,7 @@ class RaidenPolicyServer(chiral.PolicyServer):
     # Observation construction (overrides base class to add dynamic extrinsics)
     # -------------------------------------------------------------------------
 
-    def _make_obs(self, timestamp: float = 0.0) -> Observation:
+    def _make_obs(self) -> Observation:
         """Snapshot all buffers and compute per-step wrist camera extrinsics.
 
         All joint states are interpolated to the reference camera's latest frame
@@ -1007,23 +1054,26 @@ class RaidenPolicyServer(chiral.PolicyServer):
                     proprios[p.name] = self.proprios[p.name].copy()
 
         # Compute actual EE poses via FK and inject as proprio.
-        kin = _get_kinematics()
         if q_l is not None:
-            xyz_l, rot6d_l = _fk_to_xyz_rot6d(kin, q_l[:6])
+            with _kin_l_lock:
+                xyz_l, rot6d_l = _fk_to_xyz_rot6d(_get_kin_l(), q_l[:6])
             proprios[f"robot__actual__poses__left::{_ROBOT}__xyz"] = xyz_l
             proprios[f"robot__actual__poses__left::{_ROBOT}__rot_6d"] = rot6d_l
             proprios[f"robot__actual__grippers__left::{_ROBOT}_hand"] = q_l[6:7].astype(
                 np.float32
             )
         if q_r is not None:
-            xyz_r, rot6d_r = _fk_to_xyz_rot6d(kin, q_r[:6])
+            with _kin_r_lock:
+                xyz_r, rot6d_r = _fk_to_xyz_rot6d(_get_kin_r(), q_r[:6])
             proprios[f"robot__actual__poses__right::{_ROBOT}__xyz"] = xyz_r
             proprios[f"robot__actual__poses__right::{_ROBOT}__rot_6d"] = rot6d_r
             proprios[f"robot__actual__grippers__right::{_ROBOT}_hand"] = q_r[
                 6:7
             ].astype(np.float32)
 
-        return Observation(cameras=cameras, proprios=proprios, timestamp=timestamp)
+        return Observation(
+            cameras=cameras, proprios=proprios, timestamp=ref_ts_ns * 1e-9
+        )
 
     def _read_proprio(self, name: str) -> Optional[np.ndarray]:
         """Return a snapshot of a proprio buffer, or None if not available."""
@@ -1055,8 +1105,12 @@ class RaidenPolicyServer(chiral.PolicyServer):
             return np.eye(4, dtype=np.float64)
 
         try:
-            kin = _get_kinematics()
-            T_base_to_ee = _fk_padded(kin, q[:6])
+            if arm == "left":
+                with _kin_l_lock:
+                    T_base_to_ee = _fk_padded(_get_kin_l(), q[:6])
+            else:
+                with _kin_r_lock:
+                    T_base_to_ee = _fk_padded(_get_kin_r(), q[:6])
             T = T_base_to_ee @ T_cam2ee
 
             if arm == "right" and self._T_left_base_from_right_base is not None:

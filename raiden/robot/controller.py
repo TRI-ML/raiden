@@ -237,7 +237,8 @@ def smooth_move_joints(
         alpha = i / steps
         target_pos = (1 - alpha) * current_pos + alpha * target_joint_positions
         robot.command_joint_pos(target_pos)
-        time.sleep(time_interval_s / steps)
+        if i < steps:
+            time.sleep(time_interval_s / steps)
 
 
 def list_can_interfaces() -> list[str]:
