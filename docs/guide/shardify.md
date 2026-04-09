@@ -47,7 +47,7 @@ sample is identified by a UUID and consists of four file types:
 
 | File | Description |
 |---|---|
-| `{uuid}.{cam}_t{idx}.png` | RGB image at raw frame offset `idx` from the anchor (`t-1`, `t0`, etc.) — lossless PNG |
+| `{uuid}.{cam}_t{idx}.jpg` | RGB image at raw frame offset `idx` from the anchor (`t-1`, `t0`, etc.) — JPEG quality 95 |
 | `{uuid}.{cam}_t{idx}.depth.png` | Depth map at the same offset — 16-bit greyscale PNG, values in millimetres |
 | `{uuid}.lowdim.npz` | Windowed arrays of shape `(T, D)` per key (see below) |
 | `{uuid}.metadata.json` | Per-sample metadata (episode ID, anchor timestep, padding, …) |

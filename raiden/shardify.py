@@ -1,7 +1,7 @@
 """Export converted Raiden episodes to WebDataset sharded .tar format.
 
 Each sample in a shard contains:
-  {uuid}.{cam}_t{idx}.png           — camera images at specified time indices (lossless PNG)
+  {uuid}.{cam}_t{idx}.jpg           — camera images at specified time indices (JPEG quality 95)
   {uuid}.lowdim.npz                 — windowed lowdim arrays  (T × D each key)
   {uuid}.metadata.json              — episode / sample metadata
   {uuid}.language_instructions.json — language annotations
@@ -30,7 +30,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
-from PIL import Image
 from tqdm import tqdm
 
 # ---------------------------------------------------------------------------
@@ -259,34 +258,36 @@ def _load_episode_frames(ep_dir: Path) -> List[Dict[str, Any]]:
     return frames
 
 
+_JPEG_QUALITY = 95
+
+
 def _load_rgb(
     ep_dir: Path,
     camera_name: str,
     frame_idx: int,
     resize: Optional[Tuple[int, int]],
 ) -> Optional[tuple[bytes, str]]:
-    """Return (image_bytes, ext) for a frame, optionally resizing.
+    """Return (image_bytes, "jpg") for a frame, optionally resizing.
 
-    The converter saves frames with ``cv2.imwrite``, so on-disk PNGs are in BGR
-    order.  This function always returns **RGB** PNG bytes so that training
-    dataloaders using PIL (WebDataset default) receive correct colours.
+    The converter saves frames with ``cv2.imwrite`` in BGR order.  JPEG
+    encoding via cv2 converts BGR→YCbCr internally, so PIL (used by WebDataset
+    dataloaders) decodes the JPEG back as correct RGB — no manual channel flip
+    needed.
 
     Returns:
-        (bytes, "png"), or None if the file is absent.
+        (bytes, "jpg"), or None if the file is absent.
     """
     path = ep_dir / "rgb" / camera_name / f"{frame_idx:010d}.png"
     if not path.exists():
         return None
-    # cv2.imread gives BGR; flip to RGB for lossless PNG storage.
     img_bgr = cv2.imread(str(path))
     if img_bgr is None:
         return None
-    img_rgb = img_bgr[..., ::-1]  # BGR → RGB
     if resize is not None:
         h_out, w_out = resize
-        img_rgb = cv2.resize(img_rgb, (w_out, h_out), interpolation=cv2.INTER_LANCZOS4)
-    _, buf = cv2.imencode(".png", img_rgb)
-    return bytes(buf), "png"
+        img_bgr = cv2.resize(img_bgr, (w_out, h_out), interpolation=cv2.INTER_LANCZOS4)
+    _, buf = cv2.imencode(".jpg", img_bgr, [cv2.IMWRITE_JPEG_QUALITY, _JPEG_QUALITY])
+    return bytes(buf), "jpg"
 
 
 def _load_depth_png(ep_dir: Path, camera_name: str, frame_idx: int) -> Optional[bytes]:
@@ -644,7 +645,7 @@ def _write_preprocessing_config(
         "filter_still_samples": config.filter_still_samples,
         "future_lowdim_steps": config.future_lowdim_steps,
         "image_indices": list(config.image_indices),
-        "image_format": "png",
+        "image_format": "jpg",
         "max_episodes_to_process": config.max_episodes_to_process,
         "max_padding_left": config.max_padding_left,
         "max_padding_right": config.max_padding_right,
