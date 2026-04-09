@@ -57,20 +57,21 @@ Raiden supports fin-ray compliant grippers, which conform to object shapes for r
 
 | Part | File | Material | Notes |
 |---|---|---|---|
-| Adapter (mounter) | [finray_adapter.STL](https://tri-ml.github.io/raiden/assets/finray_adapter.STL) | PA6-CF | Mounts to the YAM end-effector |
-| Short finger | [finray_short.STL](https://tri-ml.github.io/raiden/assets/finray_short.STL) | TPU 95A HF | **Tested and recommended** |
-| Long finger | [finray_long.STL](https://tri-ml.github.io/raiden/assets/finray_long.STL) | TPU 95A HF | Available but not fully tested |
+| Adapter (mounter) | [finray_adapter.STL](https://tri-ml.github.io/raiden/assets/finray_adapter.STL) | [PA6-CF](https://us.store.bambulab.com/products/pa6-cf) | Mounts to the YAM end-effector |
+| Short finger | [finray_short.STL](https://tri-ml.github.io/raiden/assets/finray_short.STL) | [TPU 95A HF](https://us.store.bambulab.com/products/tpu-95a-hf) | **Tested and recommended** |
+| Long finger | [finray_long.STL](https://tri-ml.github.io/raiden/assets/finray_long.STL) | [TPU 95A HF](https://us.store.bambulab.com/products/tpu-95a-hf) | Available but not fully tested |
 
 You will also need the following parts:
 
 | Component | Link (US) | Notes |
 |---|---|---|
-| M3×0.8mm screws | [McMaster-Carr 91292A112](https://www.mcmaster.com/91292A112/) | To assemble finger to adapter |
-| Female hex standoffs | [McMaster-Carr 94868A713](https://www.mcmaster.com/94868A713/) | Spacers between adapter and end-effector |
+| M3×0.8mm screws | [McMaster-Carr 91292A112](https://www.mcmaster.com/91292A112/) | 1 pack of 100 |
+| Female hex standoffs | [McMaster-Carr 94868A713](https://www.mcmaster.com/94868A713/) | 4–8 (single–bimanual) |
+| Friction sheet | [Amazon](https://a.co/d/0iTBIF98) | Applied to finger contact surface for better grip |
 
 ### Printing
 
-Print all parts on a Bambu printer using the default profile with **support enabled**. Use the material assignments above (PA6-CF for the adapter, TPU 95A HF for the fingers).
+We have only tested printing with a Bambu printer. Other printers may work, but are not tested. Print using the default profile with **support enabled**. Use the material assignments above (PA6-CF for the adapter, TPU 95A HF for the fingers).
 
 Bambu slicer settings:
 
