@@ -832,9 +832,7 @@ def _build_sample(
             if config.use_depth:
                 depth = _load_depth_png(ep_dir, src_cam, abs_frame)
                 if depth is not None:
-                    sample_files[
-                        f"{sample_uuid}.{out_cam}_{suffix}.depth.png"
-                    ] = depth
+                    sample_files[f"{sample_uuid}.{out_cam}_{suffix}.depth.png"] = depth
 
     # ── serialize lowdim ──────────────────────────────────────────────
     buf = io.BytesIO()
