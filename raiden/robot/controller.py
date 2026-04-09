@@ -1358,7 +1358,6 @@ class RobotController:
         print("Initializing footpedal...")
         self.attach_footpedal()
 
-
     def close(self) -> None:
         """Close all robot instances, stopping their server threads and CAN connections."""
         if self._pause_timer is not None:
