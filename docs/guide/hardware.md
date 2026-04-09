@@ -92,7 +92,7 @@ These names must be set as **persistent** CAN interface aliases. In a
 **single-arm setup**, only `can_follower_l` and `can_leader_l` are needed —
 the single arm is always treated as the left arm. Follow the
 i2rt guide to assign them:
-[Setting a persistent ID for a socket CAN interface](https://github.com/i2rt-robotics/i2rt/blob/main/docs/getting-started/hardware-setup.md#persistent-can-ids).
+[Setting a persistent ID for a socket CAN interface](https://github.com/i2rt-robotics/i2rt/blob/7b6d5016f05ca63f9ef0185b7143e63f2c7a5708/docs/getting-started/hardware-setup.md#persistent-can-ids).
 
 ### Identifying each arm
 
