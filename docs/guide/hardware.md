@@ -49,6 +49,37 @@ ZED Mini cameras are mounted on the follower arm wrist links via 3D-printed moun
     multi-camera alignment straightforward. Use RealSense cameras only where their
     close-range depth quality is the primary requirement and motion is limited.
 
+## Fin-ray gripper
+
+Raiden supports fin-ray compliant grippers, which conform to object shapes for robust and gentle grasping. The gripper consists of a 3D-printed adapter that mounts to the YAM arm end-effector and interchangeable fin-ray fingers.
+
+### Parts
+
+| Part | File | Material | Notes |
+|---|---|---|---|
+| Adapter (mounter) | [finray_adapter.STL](https://tri-ml.github.io/raiden/assets/finray_adapter.STL) | PA6-CF | Mounts to the YAM end-effector |
+| Short finger | [finray_short.STL](https://tri-ml.github.io/raiden/assets/finray_short.STL) | TPU 95A HF | **Tested and recommended** |
+| Long finger | [finray_long.STL](https://tri-ml.github.io/raiden/assets/finray_long.STL) | TPU 95A HF | Available but not fully tested |
+
+You will also need the following parts:
+
+| Component | Link (US) | Notes |
+|---|---|---|
+| M3×0.8mm screws | [McMaster-Carr 91292A112](https://www.mcmaster.com/91292A112/) | To assemble finger to adapter |
+| Female hex standoffs | [McMaster-Carr 94868A713](https://www.mcmaster.com/94868A713/) | Spacers between adapter and end-effector |
+
+### Printing
+
+Print all parts on a Bambu printer using the default profile with **support enabled**. Use the material assignments above (PA6-CF for the adapter, TPU 95A HF for the fingers).
+
+Bambu slicer settings:
+
+<div style="display: flex; gap: 1rem;">
+  <img src="https://tri-ml.github.io/raiden/assets/bambu_setting_1.png" style="width: 50%; object-fit: contain;">
+  <img src="https://tri-ml.github.io/raiden/assets/bambu_setting_2.png" style="width: 50%; object-fit: contain;">
+</div>
+
+
 ## SpaceMouse setup
 
 SpaceMouse devices are identified by their `hidraw` path (e.g. `/dev/hidraw6`).

@@ -54,3 +54,15 @@ Raiden also supports Intel RealSense D400-series cameras as wrist or scene camer
 | Component | Notes | Link |
 |---|---|---|
 | Intel RealSense D400 series (e.g. D405) | Alternative wrist or scene camera; no GPU required for depth | [realsenseai.com](https://www.realsenseai.com/stereo-depth-cameras/) |
+
+**Fin-ray gripper (optional)**
+
+Fin-ray compliant grippers conform to object shapes for robust and gentle grasping. See [Hardware Setup](hardware.md#fin-ray-gripper) for assembly instructions.
+
+| Component | Qty | Notes | Link |
+|---|---|---|---|
+| 3D-printable fin-ray adapter | 1–2 | PA6-CF; one per arm | [finray_adapter.STL](https://tri-ml.github.io/raiden/assets/finray_adapter.STL) |
+| 3D-printable short fin-ray finger | 2–4 | TPU 95A HF; two per gripper; **tested and recommended** | [finray_short.STL](https://tri-ml.github.io/raiden/assets/finray_short.STL) |
+| 3D-printable long fin-ray finger | 2–4 | TPU 95A HF; two per gripper; not fully tested | [finray_long.STL](https://tri-ml.github.io/raiden/assets/finray_long.STL) |
+| M3×0.8mm socket head screws | — | To assemble finger to adapter | [McMaster-Carr 91292A112](https://www.mcmaster.com/91292A112/) |
+| Female hex standoffs | — | Spacers between adapter and end-effector | [McMaster-Carr 94868A713](https://www.mcmaster.com/94868A713/) |

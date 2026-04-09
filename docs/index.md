@@ -34,6 +34,8 @@ Key features:
 - **Policy-ready output** - converts recordings to a simple, flat file format
   with synchronized frames, per-frame extrinsics, and interpolated joint poses,
   ready to plug into policy training frameworks.
+- **[Fin-ray gripper support](guide/hardware.md#fin-ray-gripper)** - 3D-printable
+  compliant grippers that conform to object shapes for robust and gentle grasping.
 
 ## Supported configurations
 
@@ -84,7 +86,6 @@ be mixed freely within the same session.
 
 The following features are coming soon:
 
-- **Fin-ray gripper support** — support for fin-ray compliant grippers, which conform to object shapes for robust and gentle grasping.
 - **Policy training and inference** — built-in integration for policy training pipelines and closed-loop inference.
 - **LeRobot format converter** — export converted episodes to the [LeRobot](https://github.com/huggingface/lerobot) dataset format for compatibility with the Hugging Face ecosystem.
 - **Initial scene condition management** — set up and save named initial scene conditions in the console to enable reproducible, side-by-side comparison of multiple policies under identical starting states.
