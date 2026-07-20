@@ -235,6 +235,29 @@ class ConvertCommand:
     reconvert: bool = False
     """Re-convert all successful demonstrations even if already marked as converted (default: False)"""
 
+    append: bool = False
+    """Number new episodes after the highest existing one and rebuild split_all.json (ignores the DB; adds newly recorded episodes without renumbering existing ones)"""
+
+    w_intervention: float = 1.0
+    """Per-sample loss weight written onto HG-DAgger human-takeover frames (control_source==1); 1.0 = no upweighting (default)"""
+
+
+@dataclass
+class InspectCommand:
+    """Inspect raw SVO2 recordings for frame-stutter and left-eye blackouts before converting"""
+
+    recording_dir: Optional[str] = None
+    """Path to a single raw task directory to inspect (default: interactive fzf selector over <data_dir>/raw)"""
+
+    data_dir: str = "data"
+    """Root data directory (default: ./data); the selector lists tasks under <data_dir>/raw/"""
+
+    force: bool = False
+    """Ignore the per-episode inspect.json cache and rescan every view (default: False)"""
+
+    workers: Optional[int] = None
+    """Concurrent SVO2 scans (default: min(cpu_count, 8))"""
+
 
 @dataclass
 class ReplayCommand:
@@ -340,6 +363,12 @@ class ShardifyCommand:
     use_depth: bool = False
     """Include depth images (.depth.png) in shards (default: False)"""
 
+    keep: Literal["all", "interventions", "interventions_context"] = "all"
+    """HG-DAgger subsetting by per-frame control_source: 'all' (every frame), 'interventions' (only human-takeover frames), or 'interventions_context' (interventions + the keep_context frames before each). Note: 'interventions*' yield ZERO samples on non-dagger data (default: all)"""
+
+    keep_context: int = 15
+    """Policy frames to retain before each intervention when keep=interventions_context (default: 15)"""
+
 
 @dataclass
 class ServeCommand:
@@ -403,6 +432,9 @@ def _print_help() -> None:
     print("  record                      Record teleoperation demonstrations")
     print(
         "  convert                     Convert SVO2/bag recordings to UnifiedDataset format"
+    )
+    print(
+        "  inspect                     Check raw recordings for frame-stutter and blackouts"
     )
     print("  replay                      Replay recorded follower arm motion")
     print("  visualize                   Visualize a converted recording with Rerun")
@@ -581,7 +613,24 @@ def main():
                     reconvert=command.reconvert,
                     processed_base=str(_Path(command.data_dir) / "processed"),
                     tri_stereo_variant=command.tri_stereo_variant,
+                    append=command.append,
+                    w_intervention=command.w_intervention,
                 )
+
+        elif subcommand == "inspect":
+            sys.argv.pop(1)
+            command = tyro.cli(
+                InspectCommand,
+                description="Inspect raw SVO2 recordings for frame-stutter and left-eye blackouts",
+            )
+            from raiden.inspector import run_inspect
+
+            run_inspect(
+                recording_dir=command.recording_dir,
+                data_dir=command.data_dir,
+                force=command.force,
+                workers=command.workers,
+            )
 
         elif subcommand == "visualize":
             sys.argv.pop(1)
@@ -641,6 +690,8 @@ def main():
                     num_workers=command.num_workers,
                     stats_stride=command.stats_stride,
                     use_depth=command.use_depth,
+                    keep=command.keep,
+                    keep_context=command.keep_context,
                 )
                 run_shardify(
                     episode_dirs,

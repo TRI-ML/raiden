@@ -526,6 +526,24 @@ def _apply_camera_trim(
 # ---------------------------------------------------------------------------
 
 
+def _resample_flag_nearest(
+    flag_raw: np.ndarray, robot_ts: np.ndarray, ref_ts: np.ndarray
+) -> np.ndarray:
+    """Resample a discrete per-robot-frame flag onto the camera-frame grid by
+    NEAREST timestamp.
+
+    Used for ``control_source`` — a 0/1 human-takeover flag that must never be
+    linearly interpolated (``np.interp`` would smear it into a meaningless
+    fraction). For each camera timestamp we pick the robot sample whose timestamp
+    is closest, so the flag stays a clean 0/1.
+    """
+    flag_raw = np.asarray(flag_raw).reshape(-1)
+    ridx = np.clip(np.searchsorted(robot_ts, ref_ts), 1, len(robot_ts) - 1)
+    pick_left = np.abs(ref_ts - robot_ts[ridx - 1]) <= np.abs(ref_ts - robot_ts[ridx])
+    ridx = np.clip(np.where(pick_left, ridx - 1, ridx), 0, len(flag_raw) - 1)
+    return flag_raw[ridx].astype(np.int8)
+
+
 def _build_lowdim(
     seq_dir: Path,
     cameras: List[str],
@@ -538,6 +556,7 @@ def _build_lowdim(
     right_base_to_left_base: Optional[np.ndarray],
     cam_timestamps: Dict[str, Optional[np.ndarray]],
     wrist_camera_joint_keys: Optional[Dict[str, str]] = None,
+    w_intervention: float = 1.0,
 ) -> None:
     """Write seq_dir/lowdim.npz with all cameras' intrinsics/extrinsics plus joints, action, language.
 
@@ -556,6 +575,11 @@ def _build_lowdim(
                              [l_pos(3), l_rot9(9), l_gripper(1), r_pos(3), r_rot9(9), r_gripper(1)].
     ``language_task``        str  task name.
     ``language_prompt``      str  task instruction.
+    ``control_source``       int8  0 = policy drove this frame, 1 = human takeover
+                             (HG-DAgger). All-zero for ordinary teleop.
+    ``is_intervention``      bool  ``control_source == 1``.
+    ``sample_weight``        float32  per-sample loss weight; ``w_intervention`` on
+                             human-takeover frames, else 1.0.
     """
     _WALL_CLOCK_MIN_NS = 1_577_836_800_000_000_000
 
@@ -575,6 +599,11 @@ def _build_lowdim(
                 break
 
     robot_ts: Optional[np.ndarray] = None
+    # True only when ref_ts and robot_ts share the same camera-SDK nanosecond
+    # clock (the normal path). The recovery tags below are resampled by nearest
+    # timestamp, so they are only meaningful when the two grids are comparable;
+    # on the legacy linspace fallback we leave the tags at their defaults.
+    ts_aligned = False
     if robot_data is not None and n_frames > 0:
         robot_ts_raw = robot_data.get("timestamps")
         if (
@@ -583,6 +612,7 @@ def _build_lowdim(
             and robot_ts_raw.dtype == np.int64
         ):
             robot_ts = robot_ts_raw.astype(np.float64)
+            ts_aligned = True
         else:
             # Legacy: uniform linspace over the recording duration.
             duration = rec_meta.get("duration_s", 1.0)
@@ -812,6 +842,27 @@ def _build_lowdim(
     language_task = np.array(rec_meta.get("task_name", ""), dtype=object)
     language_prompt = np.array(rec_meta.get("task_instruction", ""), dtype=object)
 
+    # ── recovery-data provenance tags (HG-DAgger) ─────────────────────────
+    # Resample the per-robot-frame control_source flag onto the camera grid by
+    # NEAREST NEIGHBOUR — never np.interp, which would smear the discrete 0/1
+    # takeover flag into a meaningless fraction. Ordinary teleop recordings have
+    # no control_source key, so every frame defaults to policy/weight-1.0 and the
+    # tags are a harmless, uniform addition to the schema.
+    control_source = np.zeros(n_frames, dtype=np.int8)
+    is_intervention = np.zeros(n_frames, dtype=bool)
+    sample_weight = np.ones(n_frames, dtype=np.float32)
+    cs_raw = robot_data.get("control_source") if robot_data is not None else None
+    if (
+        cs_raw is not None
+        and ts_aligned
+        and robot_ts is not None
+        and ref_ts is not None
+        and len(robot_ts) >= 2
+    ):
+        control_source = _resample_flag_nearest(cs_raw, robot_ts, ref_ts)
+        is_intervention = control_source == 1
+        sample_weight[is_intervention] *= float(w_intervention)
+
     # ── write per-frame files into lowdim/ ────────────────────────────────
     lowdim_dir = seq_dir / "lowdim"
     lowdim_dir.mkdir(parents=True, exist_ok=True)
@@ -830,6 +881,9 @@ def _build_lowdim(
             frame_data["action_joints"] = action_joints[i]
         frame_data["language_task"] = language_task
         frame_data["language_prompt"] = language_prompt
+        frame_data["control_source"] = control_source[i]
+        frame_data["is_intervention"] = bool(is_intervention[i])
+        frame_data["sample_weight"] = sample_weight[i]
         if right_base_to_left_base is not None:
             frame_data["T_left_from_right"] = right_base_to_left_base
         with open(lowdim_dir / f"{i:010d}.pkl", "wb") as f:
@@ -883,6 +937,11 @@ def _build_sequence_metadata(
         "extrinsics": {"transform": "cam2world", "metric": True},
         "action": {"format": "joint_cmd", "dims": 14},
         "control": rec_meta.get("control", "leader"),
+        # Recovery-data provenance carried raw → converted so shardify can build
+        # the ABC 80:10:10 base/intervention mix. Defaults keep ordinary demos as
+        # plain teleop episodes.
+        "episode_kind": rec_meta.get("episode_kind", "teleop"),
+        "intervention_ratio": rec_meta.get("intervention_ratio"),
     }
 
     with open(seq_dir / "metadata.json", "w") as f:
@@ -957,6 +1016,7 @@ def convert_recording(
     ffs_iters: int = 8,
     tri_stereo_variant: str = "c64",
     reconvert: bool = False,
+    w_intervention: float = 1.0,
 ) -> Dict[str, int]:
     """Convert a recording directory to UnifiedDataset format.
 
@@ -1197,6 +1257,7 @@ def convert_recording(
         right_base_to_left_base=T_left_base_from_right_base,
         cam_timestamps=cam_timestamps,
         wrist_camera_joint_keys=wrist_camera_joint_keys,
+        w_intervention=w_intervention,
     )
     print(f"  ✓ lowdim/ ({n_min} frames)")
 
@@ -1239,6 +1300,8 @@ def convert_task(
     reconvert: bool = False,
     processed_base: Optional[str] = None,
     tri_stereo_variant: str = "c64",
+    append: bool = False,
+    w_intervention: float = 1.0,
 ) -> None:
     """Convert all recordings in a task directory into a single UnifiedDataset.
 
@@ -1288,45 +1351,67 @@ def convert_task(
     except Exception:
         _db = None
 
-    # Filter recordings: skip failures/pending, and (unless reconvert) already
-    # converted ones.  Recordings with no DB entry are treated as unknown and
-    # included so directories recorded before the DB was set up are not dropped.
-    success_dirs = []
-    skipped = 0
-    for rec_dir in recording_dirs:
-        status = "unknown"
-        already_converted = False
-        if _db is not None:
-            try:
-                demo = _db.get_demonstration_by_raw_path(str(rec_dir))
-                if demo is not None:
-                    status = demo.get("status", "pending")
-                    already_converted = bool(demo.get("converted", False))
-            except Exception:
-                pass
-        if status not in ("success", "unknown"):
-            print(f"  Skipping {rec_dir.name} (status={status})")
-            skipped += 1
-        elif already_converted and not reconvert:
-            print(
-                f"  Skipping {rec_dir.name} (already converted, use --reconvert to force)"
-            )
-            skipped += 1
-        else:
-            success_dirs.append(rec_dir)
+    # ── select recordings + choose the starting episode number ────────────
+    # Default: renumber episodes 0000.. from scratch, DB-filtered.
+    # --append: number new episodes after the highest existing one and ignore
+    # the DB (so freshly added recordings extend the dataset instead of clobbering
+    # or renumbering the episodes already on disk).
+    if append:
+        success_dirs = [
+            d for d in recording_dirs if any((d / "cameras").glob("*.svo2"))
+        ]
+        existing_nums = [
+            int(p.name) for p in out_base.iterdir() if p.is_dir() and p.name.isdigit()
+        ]
+        append_start = (max(existing_nums) + 1) if existing_nums else 0
+        if not success_dirs:
+            print("No recordings with SVO2 files to append.")
+            return
+        print(
+            f"Appending {len(success_dirs)} recording(s) starting at "
+            f"episode {append_start:04d}\n"
+        )
+    else:
+        # Filter recordings: skip failures/pending, and (unless reconvert) already
+        # converted ones.  Recordings with no DB entry are treated as unknown and
+        # included so directories recorded before the DB was set up are not dropped.
+        append_start = 0
+        success_dirs = []
+        skipped = 0
+        for rec_dir in recording_dirs:
+            status = "unknown"
+            already_converted = False
+            if _db is not None:
+                try:
+                    demo = _db.get_demonstration_by_raw_path(str(rec_dir))
+                    if demo is not None:
+                        status = demo.get("status", "pending")
+                        already_converted = bool(demo.get("converted", False))
+                except Exception:
+                    pass
+            if status not in ("success", "unknown"):
+                print(f"  Skipping {rec_dir.name} (status={status})")
+                skipped += 1
+            elif already_converted and not reconvert:
+                print(
+                    f"  Skipping {rec_dir.name} (already converted, use --reconvert to force)"
+                )
+                skipped += 1
+            else:
+                success_dirs.append(rec_dir)
 
-    if skipped:
-        print(f"\nSkipped {skipped} non-success recording(s).")
-    if not success_dirs:
-        print("No successful recordings to convert.")
-        return
+        if skipped:
+            print(f"\nSkipped {skipped} non-success recording(s).")
+        if not success_dirs:
+            print("No successful recordings to convert.")
+            return
 
-    print(f"Converting {len(success_dirs)} successful recording(s)\n")
+        print(f"Converting {len(success_dirs)} successful recording(s)\n")
 
-    for i, rec_dir in enumerate(success_dirs):
-        episode_name = f"{i:04d}"
+    for offset, rec_dir in enumerate(success_dirs):
+        episode_name = f"{append_start + offset:04d}"
         ep_dir = out_base / episode_name
-        print(f"[{i + 1}/{len(success_dirs)}] {rec_dir.name} → {episode_name}/")
+        print(f"[{offset + 1}/{len(success_dirs)}] {rec_dir.name} → {episode_name}/")
         counts = convert_recording(
             str(rec_dir),
             episode_dir=str(ep_dir),
@@ -1335,6 +1420,7 @@ def convert_task(
             ffs_iters=ffs_iters,
             tri_stereo_variant=tri_stereo_variant,
             reconvert=reconvert,
+            w_intervention=w_intervention,
         )
 
         if counts:
@@ -1363,6 +1449,20 @@ def convert_task(
                 pass
 
     # ── combined split_all.json ────────────────────────────────────────────
+    # When appending, the split must span the whole dataset on disk (existing +
+    # newly appended episodes), not just the ones converted this run.
+    if append:
+        episode_frame_counts = {}
+        for p in sorted(out_base.iterdir()):
+            if not (p.is_dir() and p.name.isdigit()):
+                continue
+            meta_file = p / "metadata.json"
+            n_frames = 0
+            if meta_file.exists():
+                with open(meta_file) as f:
+                    n_frames = json.load(f).get("num_frames", 0)
+            episode_frame_counts[p.name] = n_frames
+
     total_frames = sum(episode_frame_counts.values())
     n_eps = len(episode_frame_counts)
     split = {

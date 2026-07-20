@@ -31,6 +31,7 @@ See the **[Installation guide](https://tri-ml.github.io/raiden/guide/installatio
 | `rd calibrate` | Calibrate cameras (hand-eye + scene extrinsics) |
 | `rd teleop` | Teleoperate arms without recording |
 | `rd record` | Record teleoperation demonstrations |
+| `rd inspect` | Check raw recordings for frame-stutter and blackouts |
 | `rd replay` | Replay recorded follower arm motion |
 | `rd console` | Browse and correct demonstration metadata in a terminal UI |
 | `rd convert` | Convert successful recordings to a structured dataset |
