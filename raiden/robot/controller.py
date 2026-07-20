@@ -79,6 +79,16 @@ _GRIPPER_SAFETY_THRESHOLD = 6.0 / 71.0
 # Full stroke (71 mm) closes/opens in 1/_GRIPPER_SPEED seconds.
 _GRIPPER_SPEED = 1.0
 
+# Full-close snap for the HG-DAgger takeover path, in normalized [0,1] gripper
+# space (0 = closed, 1 = open).  The leader trigger's physical throw saturates a
+# few percent short of the passive encoder's hardcoded range, so a full squeeze
+# only drives the gripper command down to ~0.04 instead of 0.0 and the follower
+# never fully closes — it holds a visible gap and drops small parts.  Snap a
+# nearly-bottomed trigger to a complete close so a takeover can command a full
+# grasp.  Applied only in _grip_clutch (the takeover path), NOT in the shared
+# leader read, so `rd teleop` / `rd record` behaviour is unchanged.
+_GRIP_FULL_CLOSE_SNAP = 0.05
+
 # ---------------------------------------------------------------------------
 # Pyroki / J-PARSE IK helpers
 # ---------------------------------------------------------------------------
@@ -208,6 +218,22 @@ class YAMLeaderRobot:
         """Update PD gains"""
         self._robot.update_kp_kd(kp, kd)
 
+    def zero_torque_mode(self) -> None:
+        """Make the leader truly passive (free to backdrive by hand).
+
+        Delegates to the i2rt ``MotorChainRobot.zero_torque_mode()``, which
+        writes the *command* path (``_commands.kp/kd = 0``) — not just the
+        ``_kp/_kd`` gains that ``update_kp_kd`` mutates.  This matters: after a
+        home move the leader's non-zero gains are latched into the command path,
+        and the HG-DAgger loop never re-commands the leader, so a bare
+        ``update_kp_kd(0, 0)`` would never reach the motors and the leader would
+        stay PD-held at its last target (feels locked).  ``zero_torque_mode``
+        genuinely relaxes it.  Re-arm afterwards with ``update_kp_kd`` followed
+        by a ``command_joint_pos`` (which re-stamps the gains into the command
+        path).
+        """
+        self._robot.zero_torque_mode()
+
 
 def smooth_move_joints(
     robot: Robot,
@@ -239,6 +265,120 @@ def smooth_move_joints(
         robot.command_joint_pos(target_pos)
         if i < steps:
             time.sleep(time_interval_s / steps)
+
+
+# ---------------------------------------------------------------------------
+# HG-DAgger joint-delta takeover (pure numpy, no hardware coupling)
+# ---------------------------------------------------------------------------
+
+
+def _grip_clutch(
+    trigger: float, f0_grip: float, l0_grip: float, engaged: bool
+) -> Tuple[float, bool]:
+    """Bumpless absolute gripper for the unmotorized takeover trigger.
+
+    The leader gripper trigger has no motor, so unlike the 6 arm joints it can't
+    be shadowed onto the follower during policy mode — at takeover it sits
+    wherever the operator's hand left it, uncorrelated with the policy's gripper.
+    A relative/delta map then saturates: with the trigger parked at an end of its
+    travel the operator loses authority in one direction (e.g. trigger parked at
+    0 with grip=1 → can never close).  Instead HOLD the policy's gripper
+    (``f0_grip``) until the passive trigger crosses it, then track the trigger
+    ABSOLUTELY (full 0–1 range) from there: no jump at takeover, never moves the
+    gripper in an unintended direction, and ``engaged`` latches True so a later
+    trigger reversal stays in absolute control.  Returns ``(cmd, engaged)``.
+
+    All values are in normalized gripper space: **0 = closed, 1 = open**.
+    """
+    # Recover the last few percent of squeeze the trigger cannot physically
+    # reach, so a takeover can still command a full grasp.
+    if trigger <= _GRIP_FULL_CLOSE_SNAP:
+        trigger = 0.0
+    if not engaged and (
+        np.sign(l0_grip - f0_grip) == 0
+        or np.sign(trigger - f0_grip) != np.sign(l0_grip - f0_grip)
+    ):
+        engaged = True
+    cmd = trigger if engaged else f0_grip
+    return float(np.clip(cmd, 0.0, 1.0)), engaged
+
+
+def joint_delta_takeover(
+    leader_now: Dict[str, Optional[np.ndarray]],
+    q0: Tuple[
+        Optional[np.ndarray],
+        Optional[np.ndarray],
+        Optional[np.ndarray],
+        Optional[np.ndarray],
+    ],
+    dof: int = 7,
+    grip_engaged: Optional[Dict[str, bool]] = None,
+) -> np.ndarray:
+    """Joint-space delta takeover command (HG-DAgger).
+
+    The leader and follower are kinematically identical YAM arms, so an operator
+    grabbing the leader can drive the follower by the leader's motion relative to
+    the moment of takeover — no FK/IK needed::
+
+        action = follower_q0 + (leader_now - leader_q0)        # per arm
+
+    The caller syncs the leader to the follower at takeover and captures
+    ``leader_q0`` from the SAME snapshot used for the first ``leader_now``, so the
+    arm term reduces to absolute mirroring while staying seam-free by
+    construction (the edge delta is exactly zero).  The gripper uses a bumpless
+    clutch (:func:`_grip_clutch`) instead of a delta.
+
+    Arm ordering (TRI convention, LEFT-then-RIGHT — differs from the YAM source
+    which packed RIGHT-then-LEFT).  This keeps the returned command consistent
+    with ``_ee_pose_to_joint_cmd`` and ``_smooth_command`` on the TRI server, so
+    the inference loop can command ``action[:dof]`` → left follower and
+    ``action[dof:]`` → right follower for BOTH teleop and policy actions:
+
+    Args:
+        leader_now: ``{"q7_l": (7,) | None, "q7_r": (7,) | None}`` — current
+            leader poses (6 joints + gripper), as read by the input thread.
+        q0: ``(follower_q0_l, follower_q0_r, leader_q0_l, leader_q0_r)`` — the
+            measured follower poses and leader poses snapshotted at the takeover
+            edge.  Each is ``(7,)`` or ``None`` (arm absent).
+        dof: joints per arm (default 7 = 6 revolute + 1 gripper).
+        grip_engaged: ``{"l": bool, "r": bool}`` clutch latch, owned + reset by
+            the caller at each takeover edge (see :func:`_grip_clutch`).  ``None``
+            allocates a transient, non-latching dict.
+
+    Returns:
+        ``(2*dof,)`` float32 command ``[left(7), right(7)]``.  On the takeover
+        edge (``leader_now == leader_q0``) this equals ``follower_q0`` exactly
+        (zero delta — no seam jump), and the gripper holds the takeover grip.  An
+        un-grabbed arm (no leader read) also holds its grip at ``follower_q0``.
+    """
+    f0_l, f0_r, l0_l, l0_r = q0
+    if grip_engaged is None:  # caller normally owns + persists this across the takeover
+        grip_engaged = {"l": False, "r": False}
+    action = np.zeros(dof * 2, dtype=np.float32)
+
+    ll = leader_now.get("q7_l")
+    if ll is not None and f0_l is not None and l0_l is not None:
+        ll = np.asarray(ll, dtype=np.float64)
+        l0_l = np.asarray(l0_l, dtype=np.float64)
+        action[:6] = f0_l[:6] + (ll[:6] - l0_l[:6])
+        action[6], grip_engaged["l"] = _grip_clutch(
+            ll[6], float(f0_l[6]), float(l0_l[6]), grip_engaged["l"]
+        )
+    elif f0_l is not None:
+        action[:dof] = f0_l
+
+    lr = leader_now.get("q7_r")
+    if lr is not None and f0_r is not None and l0_r is not None:
+        lr = np.asarray(lr, dtype=np.float64)
+        l0_r = np.asarray(l0_r, dtype=np.float64)
+        action[dof : dof + 6] = f0_r[:6] + (lr[:6] - l0_r[:6])
+        action[dof + 6], grip_engaged["r"] = _grip_clutch(
+            lr[6], float(f0_r[6]), float(l0_r[6]), grip_engaged["r"]
+        )
+    elif f0_r is not None:
+        action[dof : dof * 2] = f0_r
+
+    return action
 
 
 def list_can_interfaces() -> list[str]:
@@ -1398,6 +1538,127 @@ class RobotController:
             self.leader_r.update_kp_kd(kp=np.zeros(6), kd=np.zeros(6))
         if self.leader_l:
             self.leader_l.update_kp_kd(kp=np.zeros(6), kd=np.zeros(6))
+
+    def return_to_home_and_disconnect(self, threshold_rad: float = 0.03) -> None:
+        """Move arms toward home, close CAN once all joints are within *threshold_rad*.
+
+        Used by the HG-DAgger looped collector between episodes: it homes every
+        arm and closes ALL four CAN buses BEFORE the heavy recording finalize
+        (SVO2 flush + np.savez).  Closing CAN first means there are no motor
+        threads left for the GIL-hogging save to starve past the DM watchdog —
+        the same reason ``DemonstrationRecorder`` shuts robots down before
+        writing.
+
+        CAN errors tend to occur in the final timesteps of reaching the exact
+        home position, so by monitoring the *actual* joint positions and closing
+        the bus as soon as they are close enough, those final-timestep errors are
+        avoided.  After this call all CAN connections are closed.  Rebuild with
+        ``initialize_robots()`` for the next episode.
+        """
+        print("\nStopping teleoperation...")
+        self.stop_teleoperation()
+
+        print("Moving arms toward home...")
+        # Restore PD gains first: leaders may be in zero_torque_mode (passive
+        # for takeover) and would sag if commanded home with zero gains.
+        self.disable_gravity_compensation()
+
+        # Start home movement on all arms, with a shared stop signal.
+        stop_event = threading.Event()
+        time.sleep(1.0)
+
+        threads = []
+        if self.follower_r and self.follower_r.motor_chain.running:
+            threads.append(
+                threading.Thread(
+                    target=smooth_move_joints,
+                    args=(self.follower_r, FOLLOWER_HOME_POS),
+                    kwargs={
+                        "time_interval_s": 2.5,
+                        "steps": 125,
+                        "stop_event": stop_event,
+                    },
+                )
+            )
+        if self.follower_l and self.follower_l.motor_chain.running:
+            threads.append(
+                threading.Thread(
+                    target=smooth_move_joints,
+                    args=(self.follower_l, FOLLOWER_HOME_POS),
+                    kwargs={
+                        "time_interval_s": 2.5,
+                        "steps": 125,
+                        "stop_event": stop_event,
+                    },
+                )
+            )
+        if self.leader_r and self.leader_r._robot.motor_chain.running:
+            threads.append(
+                threading.Thread(
+                    target=smooth_move_joints,
+                    args=(self.leader_r._robot, LEADER_HOME_POS),
+                    kwargs={
+                        "time_interval_s": 2.5,
+                        "steps": 125,
+                        "stop_event": stop_event,
+                    },
+                )
+            )
+        if self.leader_l and self.leader_l._robot.motor_chain.running:
+            threads.append(
+                threading.Thread(
+                    target=smooth_move_joints,
+                    args=(self.leader_l._robot, LEADER_HOME_POS),
+                    kwargs={
+                        "time_interval_s": 2.5,
+                        "steps": 125,
+                        "stop_event": stop_event,
+                    },
+                )
+            )
+
+        for t in threads:
+            t.start()
+
+        # Monitor actual joint positions — signal stop once close enough.
+        while any(t.is_alive() for t in threads):
+            if self._all_joints_near_home(threshold_rad):
+                stop_event.set()
+                break
+            time.sleep(0.05)
+
+        for t in threads:
+            t.join(timeout=2.0)
+
+        # Shut down CAN — motors hold last position via internal state.
+        self.close()
+        print("✓ Arms near home — CAN disconnected, safe to unplug.")
+
+    def _all_joints_near_home(self, threshold_rad: float) -> bool:
+        """Return True if every active robot's joints are within *threshold_rad* of home.
+
+        Arms with dead CAN are skipped (already in hardware damping mode).
+        """
+        try:
+            if self.follower_r and self.follower_r.motor_chain.running:
+                pos = self.follower_r.get_joint_pos()
+                if not np.allclose(pos, FOLLOWER_HOME_POS, atol=threshold_rad):
+                    return False
+            if self.follower_l and self.follower_l.motor_chain.running:
+                pos = self.follower_l.get_joint_pos()
+                if not np.allclose(pos, FOLLOWER_HOME_POS, atol=threshold_rad):
+                    return False
+            if self.leader_r and self.leader_r._robot.motor_chain.running:
+                pos = self.leader_r.get_joint_pos()
+                if not np.allclose(pos, LEADER_HOME_POS, atol=threshold_rad):
+                    return False
+            if self.leader_l and self.leader_l._robot.motor_chain.running:
+                pos = self.leader_l.get_joint_pos()
+                if not np.allclose(pos, LEADER_HOME_POS, atol=threshold_rad):
+                    return False
+        except Exception:
+            return False  # CAN already dead — treat as "close enough"
+        return True
 
     def shutdown(self):
         """Complete shutdown: stop teleop -> restore control -> go home -> close robots"""

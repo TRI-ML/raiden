@@ -5,7 +5,9 @@
       members:
         - TeleopCommand
         - RecordCommand
+        - InspectCommand
         - ConvertCommand
+        - InferCommand
         - VisualizeCommand
         - CalibrateCommand
         - RecordCalibrationPosesCommand

@@ -380,6 +380,268 @@ class DemonstrationRecorder:
 
 
 # ---------------------------------------------------------------------------
+# DaggerRecorder — HG-DAgger rollout recording on shared, live camera handles
+# ---------------------------------------------------------------------------
+
+# Joints per follower arm (6 revolute + 1 gripper) in the 14-D command vector.
+_DAGGER_DOF = 7
+
+
+class DaggerRecorder:
+    """Record an HG-DAgger rollout in the exact ``rd record`` on-disk layout.
+
+    Unlike :class:`DemonstrationRecorder`, this does NOT own cameras, a grab
+    loop, or CAN — the running :class:`~raiden.inference.RaidenInferenceLoop`
+    owns all of that.  It simply:
+
+    1. Toggles SVO2 recording on the inference loop's *already-open* live ZED
+       handles (``server._cam_handles`` — raw ``sl.Camera`` objects, NOT the
+       :class:`raiden.cameras.Camera` wrappers ``DemonstrationRecorder`` uses).
+       Every existing inference ``grab()`` then also writes an SVO2 frame, so no
+       second ZED process is spawned.  The loop must quiesce its grab threads
+       (``server._grab_paused``) around ``start()``/``stop()`` to avoid the ZED
+       ``grab()`` vs ``(en|dis)able_recording`` deadlock.
+    2. Buffers per-step observations + the commanded 14-D joints + a
+       ``control_source`` flag (0 = policy, 1 = human takeover), then writes
+       ``robot_data.npz`` + ``metadata.json`` so ``rd convert`` → ``rd shardify``
+       ingest it unchanged.
+
+    Output layout (identical to ``rd record``)::
+
+        <recording_dir>/
+            cameras/<name>.svo2
+            robot_data.npz        # standard keys + control_source (N,) int8
+            metadata.json         # episode_kind='dagger', intervention_ratio
+
+    ``robot_data.npz`` includes ``follower_{l,r}_joint_cmd`` (built from the
+    loop's commanded actions) because the TRI converter *requires* commanded
+    poses to build action labels — unlike the YAM converter it will not fall
+    back to observed positions.
+    """
+
+    def __init__(
+        self,
+        cam_handles: Dict[str, dict],
+        robot_controller: RobotController,
+        recording_dir: Path,
+        task_name: str,
+        task_instruction: str,
+        camera_fps: int = 30,
+    ):
+        self.cam_handles = cam_handles
+        self.robot_controller = robot_controller
+        self.recording_dir = recording_dir
+        self.task_name = task_name
+        self.task_instruction = task_instruction
+        self.camera_fps = camera_fps
+
+        self.cameras_dir = recording_dir / "cameras"
+        self.cameras_dir.mkdir(parents=True, exist_ok=True)
+
+        self.is_recording = False
+        self._frames: List[Dict] = []
+        self._start_time: float = 0.0
+
+    def start(self) -> None:
+        """Enable SVO2 recording on each live ZED handle and begin buffering."""
+        if self.is_recording:
+            return
+        import pyzed.sl as sl
+
+        # DaggerRecorder can only record ZED handles (raw sl.Camera + SVO2). Warn
+        # loudly if any configured camera is skipped so the resulting dagger
+        # episode's smaller camera set is not a silent divergence from teleop
+        # recordings (a data-quality trap this toolkit exists to prevent).
+        skipped = [n for n, h in self.cam_handles.items() if h.get("type") != "zed"]
+        if skipped:
+            print(
+                f"  Warning: DaggerRecorder records ZED cameras only — NOT "
+                f"recording {skipped}. Dagger episodes will have fewer cameras "
+                f"than `rd record` teleop episodes for this task."
+            )
+
+        for name, handle in self.cam_handles.items():
+            # Only ZED handles carry a raw sl.Camera we can record from; a
+            # RealSense handle has a 'pipeline' but no 'camera' and is skipped.
+            if handle.get("type") != "zed":
+                continue
+            cam = handle.get("camera")
+            if cam is None:
+                continue
+            params = sl.RecordingParameters()
+            # Match raiden.cameras.zed.ZedCamera.start_recording so the SVO2
+            # files are identical to those produced by `rd record`.
+            params.compression_mode = sl.SVO_COMPRESSION_MODE.H264
+            params.video_filename = str(self.cameras_dir / f"{name}.svo2")
+            status = cam.enable_recording(params)
+            if status != sl.ERROR_CODE.SUCCESS:
+                print(f"  Warning: SVO2 recording failed for '{name}': {status}")
+
+        self._frames = []
+        self._start_time = time.monotonic()
+        self.is_recording = True
+
+    def add_frame(
+        self, t_ns: int, obs: Dict, control_source: int, joint_cmd: np.ndarray
+    ) -> None:
+        """Buffer one rollout frame (call once per inference control step).
+
+        Args:
+            t_ns: camera-SDK-clock timestamp (aligns with SVO2 frame timestamps).
+            obs: ``robot_controller.get_all_observations()`` snapshot.
+            control_source: 0 = policy drove this frame, 1 = human takeover.
+            joint_cmd: (14,) commanded joints ``[left(7), right(7)]`` (TRI order).
+        """
+        if not self.is_recording:
+            return
+        self._frames.append(
+            {
+                "t": int(t_ns),
+                "obs": obs,
+                "control_source": int(control_source),
+                "cmd": np.asarray(joint_cmd, dtype=np.float32),
+            }
+        )
+
+    def stop(self, complete: bool = True, verdict: Optional[str] = None) -> Path:
+        """Disable SVO2 recording and persist robot_data.npz + metadata.json."""
+        if not self.is_recording:
+            return self.recording_dir
+        self.is_recording = False
+        # Duration from the buffered frame timestamps (camera SDK clock), NOT
+        # wall clock: stop() runs AFTER the shutdown home move, so
+        # monotonic() - _start_time would over-count by the home-move seconds
+        # and understate robot_hz.  The frame span is the true data duration.
+        if len(self._frames) >= 2:
+            duration = (self._frames[-1]["t"] - self._frames[0]["t"]) / 1e9
+        else:
+            duration = time.monotonic() - self._start_time
+
+        for handle in self.cam_handles.values():
+            if handle.get("type") != "zed":
+                continue
+            cam = handle.get("camera")
+            if cam is not None:
+                try:
+                    cam.disable_recording()
+                except Exception:
+                    pass
+
+        self._save_robot_data()
+        self._save_metadata(duration, complete=complete, verdict=verdict)
+        return self.recording_dir
+
+    def discard(self) -> None:
+        """Disable SVO2 recording and delete the episode directory (no save)."""
+        self.is_recording = False
+        for handle in self.cam_handles.values():
+            if handle.get("type") != "zed":
+                continue
+            cam = handle.get("camera")
+            if cam is not None:
+                try:
+                    cam.disable_recording()
+                except Exception:
+                    pass
+        try:
+            shutil.rmtree(self.recording_dir)
+        except Exception as exc:
+            print(f"  (discard cleanup error: {exc})")
+
+    # ------------------------------------------------------------------
+
+    def _save_robot_data(self) -> None:
+        """Stack buffered frames into robot_data.npz (same keys as rd record)."""
+        output_file = self.recording_dir / "robot_data.npz"
+        n = len(self._frames)
+        if n == 0:
+            print("  Warning: no rollout frames recorded")
+            return
+
+        data: Dict[str, np.ndarray] = {}
+        data["timestamps"] = np.array([f["t"] for f in self._frames], dtype=np.int64)
+
+        # Stack every observation key for every robot (mirrors
+        # DemonstrationRecorder._save_robot_data).
+        robot_names = list(self._frames[0]["obs"].keys())
+        for robot_name in robot_names:
+            obs_keys = list(self._frames[0]["obs"][robot_name].keys())
+            for key in obs_keys:
+                arr = np.stack([f["obs"][robot_name][key] for f in self._frames])
+                data[f"{robot_name}_{key}"] = arr
+
+        # follower_<arm>_joint_pos_7d — observed: arm joints (6) + gripper (1).
+        for arm_key in ("follower_r", "follower_l"):
+            jp_key = f"{arm_key}_joint_pos"
+            gp_key = f"{arm_key}_gripper_pos"
+            if jp_key in data and gp_key in data:
+                grip = data[gp_key].reshape(n, 1).astype(np.float32)
+                data[f"{arm_key}_joint_pos_7d"] = np.concatenate(
+                    [data[jp_key].astype(np.float32), grip], axis=1
+                )
+
+        # follower_<arm>_joint_cmd — commanded: the 14-D action this loop sent
+        # ([left(7), right(7)], TRI order).  Required by the TRI converter.
+        cmds = np.stack([f["cmd"] for f in self._frames]).astype(np.float32)  # (N,14)
+        if "follower_l_joint_pos" in data:
+            data["follower_l_joint_cmd"] = cmds[:, :_DAGGER_DOF]
+        if "follower_r_joint_pos" in data:
+            data["follower_r_joint_cmd"] = cmds[:, _DAGGER_DOF : _DAGGER_DOF * 2]
+
+        # Per-frame HG-DAgger control_source flag (0 = policy, 1 = human).
+        data["control_source"] = np.array(
+            [f["control_source"] for f in self._frames], dtype=np.int8
+        )
+
+        np.savez_compressed(output_file, **data)
+        print(f"  ✓ Rollout data saved  ({n} frames) → {output_file}")
+
+    def _save_metadata(
+        self, duration: float, complete: bool = True, verdict: Optional[str] = None
+    ) -> None:
+        output_file = self.recording_dir / "metadata.json"
+        n = len(self._frames)
+        hz = n / duration if duration > 0 else 0.0
+        ratio = (
+            float(np.mean([f["control_source"] for f in self._frames])) if n else 0.0
+        )
+
+        # Only ZED handles actually wrote an SVO2 file; list just those so
+        # `rd convert` doesn't look for a video that was never recorded.
+        recorded_cameras = [
+            name
+            for name, handle in self.cam_handles.items()
+            if handle.get("type") == "zed" and handle.get("camera") is not None
+        ]
+        meta = RecordingMetadata(
+            task_name=self.task_name,
+            task_instruction=self.task_instruction,
+            timestamp=datetime.now().isoformat(),
+            duration_s=round(duration, 3),
+            robot_frames=n,
+            robot_hz=round(hz, 1),
+            cameras=recorded_cameras,
+            camera_fps=self.camera_fps,
+            control="dagger",
+            complete=complete,
+            converted=False,
+        )
+        # Extra keys beyond the RecordingMetadata dataclass (same pattern as
+        # DemonstrationRecorder's camera_start_times_ns).  Keeping them out of
+        # the dataclass leaves DemonstrationRecorder's metadata.json unchanged.
+        # convert/shardify read episode_kind + intervention_ratio to weight the
+        # human corrections.
+        meta_dict = asdict(meta)
+        meta_dict["verdict"] = verdict
+        meta_dict["episode_kind"] = "dagger"
+        meta_dict["intervention_ratio"] = round(ratio, 4)
+
+        with open(output_file, "w") as f:
+            json.dump(meta_dict, f, indent=2)
+        print(f"  ✓ Metadata saved → {output_file}  (intervention_ratio={ratio:.2f})")
+
+
+# ---------------------------------------------------------------------------
 # Camera factory
 # ---------------------------------------------------------------------------
 
@@ -508,7 +770,10 @@ def _next_recording_dir(task_dir: Path) -> Path:
     treated as an incomplete recording, wiped, and reused.  Otherwise a new
     numbered directory is created.
     """
-    existing = sorted(d for d in task_dir.iterdir() if d.is_dir() and d.name.isdigit())
+    existing = sorted(
+        (d for d in task_dir.iterdir() if d.is_dir() and d.name.isdigit()),
+        key=lambda d: int(d.name),
+    )
 
     if existing:
         last_dir = existing[-1]
@@ -525,7 +790,12 @@ def _next_recording_dir(task_dir: Path) -> Path:
             last_dir.mkdir()
             return last_dir
 
-    episode_idx = f"{len(existing):04d}"
+    # Number the next episode AFTER the highest existing index (max+1), NOT
+    # len(existing): if any earlier numbered dir was deleted (e.g. an appended
+    # dagger round, or a discarded episode) the count-based name would collide
+    # with a surviving dir and mkdir() would raise (YAM commit 58a6259).
+    next_num = int(existing[-1].name) + 1 if existing else 0
+    episode_idx = f"{next_num:04d}"
     new_dir = task_dir / episode_idx
     new_dir.mkdir()
     return new_dir

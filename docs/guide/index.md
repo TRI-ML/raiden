@@ -7,11 +7,13 @@
 3. **[Install software](installation.md)** - install Raiden and hardware SDKs.
 4. **[Calibrate cameras](calibration.md)** - hand-eye calibration for wrist cameras and static extrinsics for the scene camera.
 5. **[Record demonstrations](recording.md)** - capture teleoperation episodes with synchronized cameras and robot joint data.
-6. **[Convert to dataset](conversion.md)** - extract frames, synchronize multi-camera streams, and interpolate joint poses into a structured dataset.
-7. **[Shardify](shardify.md)** - export converted episodes to WebDataset sharded `.tar` files for policy training.
-8. **[Evaluation](serve.md)** - run the live policy inference server (chiral protocol).
-9. **[Replay](replay.md)** - replay recorded follower arm motion on the physical hardware to verify a recording.
-10. **[Visualize](visualization.md)** - inspect converted recordings interactively in Rerun.
+6. **[Inspect data quality](inspection.md)** - flag frame-stutter and black frames in raw recordings before converting.
+7. **[Convert to dataset](conversion.md)** - extract frames, synchronize multi-camera streams, and interpolate joint poses into a structured dataset.
+8. **[Shardify](shardify.md)** - export converted episodes to WebDataset sharded `.tar` files for policy training.
+9. **[Evaluation](serve.md)** - run the live policy inference server (chiral protocol).
+10. **[Recovery data collection](recovery.md)** - collect HG-DAgger interactive corrections to fix a drifting policy.
+11. **[Replay](replay.md)** - replay recorded follower arm motion on the physical hardware to verify a recording.
+12. **[Visualize](visualization.md)** - inspect converted recordings interactively in Rerun.
 
 ## Commands
 
@@ -21,9 +23,11 @@
 | `rd calibrate` | Calibrate cameras (hand-eye + scene extrinsics) |
 | `rd teleop` | Teleoperate arms without recording |
 | `rd record` | Record teleoperation demonstrations |
+| `rd inspect` | Check raw recordings for frame-stutter and blackouts |
 | `rd convert` | Convert raw recordings to a structured dataset |
 | `rd shardify` | Export converted episodes to WebDataset shards |
 | `rd serve` | Start the chiral policy server for live inference |
+| `rd infer` | Local inference loop + HG-DAgger interactive correction |
 | `rd replay` | Replay recorded follower arm motion |
 | `rd visualize` | Visualize a converted recording with Rerun |
 

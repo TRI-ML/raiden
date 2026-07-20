@@ -90,6 +90,18 @@ class ShardifyConfig:
     #: Only feed every N-th sample into the stats accumulators to save memory.
     stats_stride: int = 10
 
+    # Recovery-data (HG-DAgger) subsetting
+    #: Which anchor frames to keep, by per-frame ``control_source``:
+    #: ``"all"`` (every frame), ``"interventions"`` (only human-takeover frames,
+    #: ``control_source == 1``), or ``"interventions_context"`` (interventions
+    #: plus the ``keep_context`` policy frames leading into each one — the drift
+    #: window). ``"all"`` is the ABC-preferred recipe (keep diversity, upweight
+    #: corrections via ``sample_weight``).
+    keep: str = "all"
+    #: Number of leading policy frames to retain before each intervention when
+    #: ``keep == "interventions_context"``.
+    keep_context: int = 15
+
 
 # ---------------------------------------------------------------------------
 # Rotation helpers
@@ -745,6 +757,34 @@ def select_processed_task(data_dir: str = "data") -> List[Tuple[Path, List[Path]
 # ---------------------------------------------------------------------------
 
 
+def _keep_anchor(
+    control_source: np.ndarray,
+    t: int,
+    keep: str,
+    keep_context: int,
+    n_frames: int,
+) -> bool:
+    """Decide whether anchor frame ``t`` survives the ``--keep`` filter.
+
+    - ``"all"``: always keep.
+    - ``"interventions"``: keep only human-takeover frames (``control_source==1``).
+    - ``"interventions_context"``: keep interventions plus the ``keep_context``
+      policy frames leading into each one. Implemented as a forward look-ahead —
+      frame ``t`` is kept iff an intervention begins within the next
+      ``keep_context`` frames, which is exactly the drift window before it.
+      ``max(1, keep_context)`` means ``keep_context == 0`` still keeps the single
+      frame immediately before an intervention (not "interventions only").
+    """
+    if keep == "all":
+        return True
+    if control_source[t] == 1:
+        return True
+    if keep == "interventions_context":
+        hi = min(n_frames, t + max(1, keep_context) + 1)
+        return bool((control_source[t:hi] == 1).any())
+    return False  # keep == "interventions" and this is a policy frame
+
+
 def _build_sample(
     args: tuple,
 ) -> Dict[str, Any]:
@@ -770,6 +810,17 @@ def _build_sample(
     control = ctx["control"]
     ep_dir = ctx["ep_dir"]
     s = config.stride
+
+    # ── keep filter (HG-DAgger recovery-data subsetting) ──────────────
+    # Runs first, before any window/image work, so dropped anchors are cheap.
+    # NOTE: on data without control_source (ordinary teleop, or converts made
+    # before this feature) the array is all-zero, so keep != "all" yields ZERO
+    # samples — the filter empties the set rather than no-opping. Use keep=all
+    # (the default) on non-dagger data.
+    if not _keep_anchor(
+        ctx["control_source"], t, config.keep, config.keep_context, n_frames
+    ):
+        return {"filtered": "keep"}
 
     # ── padding filter ────────────────────────────────────────────────
     left_frames_needed = config.past_lowdim_steps * s
@@ -853,6 +904,15 @@ def _build_sample(
         "original_episode_length": n_frames,
         "is_padded": left_pad > 0 or right_pad > 0,
         "control": control,
+        # Recovery-data provenance, so a merged shard set stays splittable for
+        # the ABC 80:10:10 base/intervention mix.
+        "episode_kind": ctx["episode_kind"],
+        "is_intervention": bool(
+            np.asarray(frames[t].get("is_intervention", False)).reshape(-1)[0]
+        ),
+        "sample_weight": float(
+            np.asarray(frames[t].get("sample_weight", 1.0)).reshape(-1)[0]
+        ),
     }
     sample_files[f"{sample_uuid}.metadata.json"] = json.dumps(sample_meta).encode()
 
@@ -933,6 +993,7 @@ def run_shardify(
     filtered_padding = 0
     filtered_still = 0
     filtered_nan = 0
+    filtered_keep = 0
     stats_counter = 0
 
     # ── Phase 1: load all episodes ────────────────────────────────────────
@@ -954,11 +1015,22 @@ def run_shardify(
         anchor_frame = frames[0]
         with open(ep_dir / "metadata.json") as _mf:
             _ep_meta = json.load(_mf)
+        # Per-frame human-takeover flag, read once so the keep filter and the
+        # interventions_context look-ahead are O(1) per anchor. Defaults to all
+        # zeros on ordinary (non-dagger) episodes.
+        control_source = np.array(
+            [
+                int(np.asarray(fr.get("control_source", 0)).reshape(-1)[0])
+                for fr in frames
+            ],
+            dtype=np.int8,
+        )
         ep_contexts.append(
             {
                 "ep_dir": ep_dir,
                 "frames": frames,
                 "n_frames": len(frames),
+                "control_source": control_source,
                 "src_cam_names": [
                     _reverse_map(config.camera_name_map, out_cam)
                     for out_cam in output_cam_names
@@ -967,6 +1039,7 @@ def run_shardify(
                 "language_prompt": str(anchor_frame.get("language_prompt", "")),
                 "episode_id": ep_dir.name,
                 "control": _ep_meta.get("control", "leader"),
+                "episode_kind": _ep_meta.get("episode_kind", "teleop"),
             }
         )
         total_frames += len(frames)
@@ -1003,6 +1076,8 @@ def run_shardify(
                 filtered_still += 1
             elif result["filtered"] == "nan":
                 filtered_nan += 1
+            elif result["filtered"] == "keep":
+                filtered_keep += 1
             else:
                 writer.add(result["sample_files"])
                 total_samples += 1
@@ -1010,7 +1085,10 @@ def run_shardify(
                 ep_sample_counts[episode_id] = ep_sample_counts.get(episode_id, 0) + 1
                 stats_counter += 1
                 pbar.set_postfix(
-                    filtered=filtered_padding + filtered_still + filtered_nan,
+                    filtered=filtered_padding
+                    + filtered_still
+                    + filtered_nan
+                    + filtered_keep,
                     shard=writer._shard_idx,
                 )
 
@@ -1078,6 +1156,8 @@ def run_shardify(
             "padding_samples_filtered": filtered_padding,
             "still_samples_filtered": filtered_still,
             "nan_samples_filtered": filtered_nan,
+            "keep_samples_filtered": filtered_keep,
+            "keep_mode": config.keep,
             "elapsed_seconds": round(elapsed, 1),
         },
     }
@@ -1086,10 +1166,11 @@ def run_shardify(
     with open(shard_dir / "processing_metadata.json", "w") as f:
         json.dump(proc_meta, f, indent=2)
 
+    keep_msg = f" keep[{config.keep}]={filtered_keep}" if config.keep != "all" else ""
     print(
         f"\nDone: {total_samples} samples → {writer._shard_idx} shards  "
-        f"filtered: {filtered_padding + filtered_still + filtered_nan} "
-        f"(pad={filtered_padding} still={filtered_still} nan={filtered_nan})  "
+        f"filtered: {filtered_padding + filtered_still + filtered_nan + filtered_keep} "
+        f"(pad={filtered_padding} still={filtered_still} nan={filtered_nan}{keep_msg})  "
         f"elapsed: {elapsed:.0f}s"
     )
     print(f"Output: {shard_dir}")

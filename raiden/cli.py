@@ -235,6 +235,29 @@ class ConvertCommand:
     reconvert: bool = False
     """Re-convert all successful demonstrations even if already marked as converted (default: False)"""
 
+    append: bool = False
+    """Number new episodes after the highest existing one and rebuild split_all.json (ignores the DB; adds newly recorded episodes without renumbering existing ones)"""
+
+    w_intervention: float = 1.0
+    """Per-sample loss weight written onto HG-DAgger human-takeover frames (control_source==1); 1.0 = no upweighting (default)"""
+
+
+@dataclass
+class InspectCommand:
+    """Inspect raw SVO2 recordings for frame-stutter and left-eye blackouts before converting"""
+
+    recording_dir: Optional[str] = None
+    """Path to a single raw task directory to inspect (default: interactive fzf selector over <data_dir>/raw)"""
+
+    data_dir: str = "data"
+    """Root data directory (default: ./data); the selector lists tasks under <data_dir>/raw/"""
+
+    force: bool = False
+    """Ignore the per-episode inspect.json cache and rescan every view (default: False)"""
+
+    workers: Optional[int] = None
+    """Concurrent SVO2 scans (default: min(cpu_count, 8))"""
+
 
 @dataclass
 class ReplayCommand:
@@ -340,6 +363,12 @@ class ShardifyCommand:
     use_depth: bool = False
     """Include depth images (.depth.png) in shards (default: False)"""
 
+    keep: Literal["all", "interventions", "interventions_context"] = "all"
+    """HG-DAgger subsetting by per-frame control_source: 'all' (every frame), 'interventions' (only human-takeover frames), or 'interventions_context' (interventions + the keep_context frames before each). Note: 'interventions*' yield ZERO samples on non-dagger data (default: all)"""
+
+    keep_context: int = 15
+    """Policy frames to retain before each intervention when keep=interventions_context (default: 15)"""
+
 
 @dataclass
 class ServeCommand:
@@ -385,6 +414,77 @@ class ServeCommand:
     """Path to calibration_results.json (default: ~/.config/raiden/calibration_results.json)"""
 
 
+@dataclass
+class InferCommand:
+    """Run a local model-agnostic inference loop (ModelBridge), optionally with HG-DAgger"""
+
+    bridge: str
+    """ModelBridge to load, as 'module.path:ClassName' (required)"""
+
+    ckpt_path: str
+    """Path to the model checkpoint passed to bridge.load() (required)"""
+
+    action_hz: float = 30.0
+    """Control-loop frequency in Hz (should match the training data frame rate)"""
+
+    action_type: Literal["joint", "ee_pose"] = "joint"
+    """Action space: 'joint' (14-D joint positions, left then right) or 'ee_pose' (20-D EE poses, IK solved on-the-fly)"""
+
+    intervene: bool = False
+    """Bring up the passive leaders + the policy<->teleop HG-DAgger state machine (implies --record)"""
+
+    record: bool = False
+    """Record the rollout with a per-frame control_source flag (implied by --intervene)"""
+
+    dagger_task: Optional[str] = None
+    """Task name for recorded rollouts (default: interactive fzf selector)"""
+
+    dagger_instruction: Optional[str] = None
+    """Language instruction for the recorded task (default: looked up from the DB)"""
+
+    session: bool = False
+    """Looped collection: record many rollouts in one run (leader BOTTOM button ends an episode, keyboard s/d saves or discards) instead of a single Ctrl+C-terminated rollout"""
+
+    leader_track: bool = True
+    """Shadow tracking: in policy mode the leaders continuously mirror the followers for instant, seam-free takeover (default: True; --no-leader-track uses a ~1.5s sync at takeover)"""
+
+    reset_pose: Optional[str] = None
+    """Move the followers to the first frame of this robot_data.npz before the rollout (default: none)"""
+
+    data_dir: str = "data"
+    """Root data directory (default: ./data); recorded rollouts go to <data_dir>/raw/<task>/"""
+
+    max_joint_delta: float = 0.8
+    """Maximum allowed joint delta per policy step in radians before the loop e-stops (policy mode only)"""
+
+    stereo_method: Literal["zed", "ffs", "tri_stereo"] = "zed"
+    """Depth backend: 'zed' (SDK NEURAL_LIGHT), 'ffs' (Fast Foundation Stereo), or 'tri_stereo' (TRI Stereo)"""
+
+    ffs_scale: float = 1.0
+    """Input resize scale for FFS inference (e.g. 0.5 halves resolution for speed)"""
+
+    ffs_iters: int = 8
+    """FFS update iterations (range 4–32)"""
+
+    tri_stereo_variant: Literal["c32", "c64"] = "c64"
+    """TRI Stereo model variant: 'c64' (higher quality) or 'c32' (faster)"""
+
+    no_depth: bool = False
+    """Disable depth sensing on ZED cameras (faster, no NEURAL_LIGHT inference)"""
+
+    resize_images: Optional[str] = "384x384"
+    """Resize images to HxW before passing to the model (default: '384x384'). Pass empty string to disable."""
+
+    visualize: bool = False
+    """Stream camera images to a Rerun web viewer at 30 FPS"""
+
+    camera_config_file: str = ""
+    """Path to camera.json (default: ~/.config/raiden/camera.json)"""
+
+    calibration_file: str = ""
+    """Path to calibration_results.json (default: ~/.config/raiden/calibration_results.json)"""
+
+
 def _load_spacemouse_config(path: str = SPACEMOUSE_CONFIG) -> dict:
     try:
         with open(path) as f:
@@ -404,6 +504,9 @@ def _print_help() -> None:
     print(
         "  convert                     Convert SVO2/bag recordings to UnifiedDataset format"
     )
+    print(
+        "  inspect                     Check raw recordings for frame-stutter and blackouts"
+    )
     print("  replay                      Replay recorded follower arm motion")
     print("  visualize                   Visualize a converted recording with Rerun")
     print("  record_calibration_poses    Record robot poses for camera calibration")
@@ -418,6 +521,9 @@ def _print_help() -> None:
     print("  reset_can                   Reset CAN interfaces (bring down then up)")
     print(
         "  serve                       Start the chiral policy server for live inference"
+    )
+    print(
+        "  infer                       Run a local inference loop (ModelBridge); --intervene for HG-DAgger"
     )
     print(
         "  make_ffs_onnx               Export Fast Foundation Stereo model to ONNX / TensorRT engines"
@@ -581,7 +687,24 @@ def main():
                     reconvert=command.reconvert,
                     processed_base=str(_Path(command.data_dir) / "processed"),
                     tri_stereo_variant=command.tri_stereo_variant,
+                    append=command.append,
+                    w_intervention=command.w_intervention,
                 )
+
+        elif subcommand == "inspect":
+            sys.argv.pop(1)
+            command = tyro.cli(
+                InspectCommand,
+                description="Inspect raw SVO2 recordings for frame-stutter and left-eye blackouts",
+            )
+            from raiden.inspector import run_inspect
+
+            run_inspect(
+                recording_dir=command.recording_dir,
+                data_dir=command.data_dir,
+                force=command.force,
+                workers=command.workers,
+            )
 
         elif subcommand == "visualize":
             sys.argv.pop(1)
@@ -641,6 +764,8 @@ def main():
                     num_workers=command.num_workers,
                     stats_stride=command.stats_stride,
                     use_depth=command.use_depth,
+                    keep=command.keep,
+                    keep_context=command.keep_context,
                 )
                 run_shardify(
                     episode_dirs,
@@ -736,6 +861,51 @@ def main():
                 resize_images_size=resize,
                 visualize=command.visualize,
             )
+
+        elif subcommand == "infer":
+            sys.argv.pop(1)
+            command = tyro.cli(
+                InferCommand,
+                description="Run a local model-agnostic inference loop, optionally with HG-DAgger interactive correction",
+            )
+            from raiden.inference import RaidenInferenceLoop, load_bridge
+
+            resize: tuple | None = None
+            if command.resize_images:
+                h, w = command.resize_images.split("x")
+                resize = (int(h), int(w))
+
+            bridge = load_bridge(command.bridge)
+            loop = RaidenInferenceLoop(
+                bridge,
+                ckpt_path=command.ckpt_path,
+                action_hz=command.action_hz,
+                intervene=command.intervene,
+                record=command.record,
+                dagger_task=command.dagger_task,
+                dagger_instruction=command.dagger_instruction,
+                reset_pose=command.reset_pose,
+                leader_track=command.leader_track,
+                data_dir=command.data_dir,
+                camera_config_file=command.camera_config_file or CAMERA_CONFIG,
+                calibration_file=command.calibration_file or CALIBRATION_FILE,
+                stereo_method=command.stereo_method,
+                ffs_scale=command.ffs_scale,
+                ffs_iters=command.ffs_iters,
+                tri_stereo_variant=command.tri_stereo_variant,
+                max_joint_delta=command.max_joint_delta,
+                action_type=command.action_type,
+                no_depth=command.no_depth,
+                resize_images_size=resize,
+                visualize=command.visualize,
+            )
+            try:
+                if command.session:
+                    loop.run_session()
+                else:
+                    loop.run()
+            except KeyboardInterrupt:
+                print("\nShutting down...")
 
         elif subcommand == "make_ffs_onnx":
             sys.argv.pop(1)

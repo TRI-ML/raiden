@@ -338,10 +338,14 @@ class RaidenPolicyServer(chiral.PolicyServer):
             name: 0 for name in self._cam_handles
         }
 
-        # Initialize follower robots only (leaders not needed for inference).
+        # Follower arms are always initialized.  Leader arms are brought up only
+        # when a subclass asks for them: the base server (rd serve) leaves them
+        # off, while RaidenInferenceLoop overrides _wants_leaders() to True for
+        # the HG-DAgger interactive-correction loop.
+        _use_leaders = self._wants_leaders()
         self._robot = RobotController(
-            use_right_leader=False,
-            use_left_leader=False,
+            use_right_leader=_use_leaders,
+            use_left_leader=_use_leaders,
             use_right_follower=True,
             use_left_follower=True,
         )
@@ -365,6 +369,12 @@ class RaidenPolicyServer(chiral.PolicyServer):
         self._step_count = 0
         self._t_sum = 0.0
         self._running = True
+        # When set, the ZED capture loops skip grab() so a subclass can toggle
+        # SVO2 (enable/disable_recording) on the live camera handles without
+        # deadlocking the SDK (grab() vs recording-toggle).  Cleared by default,
+        # so rd serve behavior is unchanged; only RaidenInferenceLoop sets it
+        # (around DaggerRecorder start/stop in looped collection).
+        self._grab_paused = threading.Event()
         # Executor for async smooth commands so policy inference overlaps motion.
         self._smooth_executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="smooth"
@@ -406,6 +416,20 @@ class RaidenPolicyServer(chiral.PolicyServer):
         self._robot.attach_footpedal(callback=self._trigger_estop)
 
         print("\nRaiden policy server ready.")
+
+    # -------------------------------------------------------------------------
+    # Extension hooks (overridden by RaidenInferenceLoop)
+    # -------------------------------------------------------------------------
+
+    def _wants_leaders(self) -> bool:
+        """Whether __init__ should bring up the leader arms.
+
+        The base policy server (rd serve) and plain inference use the followers
+        only, so this returns False.  RaidenInferenceLoop overrides it to return
+        True when running the HG-DAgger interactive-correction loop, which needs
+        the passive leaders for operator takeover.
+        """
+        return False
 
     # -------------------------------------------------------------------------
     # Calibration helpers
@@ -983,12 +1007,20 @@ class RaidenPolicyServer(chiral.PolicyServer):
     # Observation construction (overrides base class to add dynamic extrinsics)
     # -------------------------------------------------------------------------
 
-    def _make_obs(self) -> Observation:
+    def _make_obs(self, timestamp: Optional[float] = None) -> Observation:
         """Snapshot all buffers and compute per-step wrist camera extrinsics.
 
         All joint states are interpolated to the reference camera's latest frame
         arrival time so the observation is temporally coherent across cameras and
         the proprioception stream.
+
+        Args:
+            timestamp: If given, override the returned ``Observation.timestamp``
+                with this value (e.g. a synthetic step-based clock the inference
+                loop passes so the model sees monotonic step times).  Proprio /
+                camera interpolation still uses the ZED-clock reference time —
+                only the reported observation timestamp changes.  ``None``
+                (default) keeps the original behavior (reference ZED time).
         """
         # Reference timestamp: the reference camera's arrival time shifted onto
         # the unified time axis (arrival_ts + phase_offset).
@@ -1072,7 +1104,9 @@ class RaidenPolicyServer(chiral.PolicyServer):
             ].astype(np.float32)
 
         return Observation(
-            cameras=cameras, proprios=proprios, timestamp=ref_ts_ns * 1e-9
+            cameras=cameras,
+            proprios=proprios,
+            timestamp=(timestamp if timestamp is not None else ref_ts_ns * 1e-9),
         )
 
     def _read_proprio(self, name: str) -> Optional[np.ndarray]:
@@ -1252,6 +1286,14 @@ class RaidenPolicyServer(chiral.PolicyServer):
             confidence_threshold=99, texture_confidence_threshold=100
         )
         while self._running:
+            # HG-DAgger: a DaggerRecorder toggles SVO2 recording
+            # (enable/disable_recording) on this same live handle between
+            # episodes.  A concurrent grab() during that toggle deadlocks the
+            # ZED SDK, so quiesce grabbing while _grab_paused is set.  Default
+            # clear → no behavior change for rd serve.
+            if self._grab_paused.is_set():
+                time.sleep(0.02)
+                continue
             if cam.grab(runtime) == sl.ERROR_CODE.SUCCESS:
                 # Record hardware capture timestamp immediately after grab, before
                 # any processing, so it matches the ZED clock used in the recorder.
