@@ -58,6 +58,15 @@ __all__ = [
     "LEADER_HOME_POS",
 ]
 
+# CAN interface name mapping — override here if your interfaces have different names
+# (e.g. "can0" before udev rename rules are set up)
+_CAN_NAMES = {
+    "follower_r": "can1",
+    "follower_l": "can0",
+    "leader_r": "can_leader_r",
+    "leader_l": "can_leader_l",
+}
+
 # Default home positions
 FOLLOWER_HOME_POS = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0])  # 6 joints + gripper
 LEADER_HOME_POS = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])  # 6 joints only
@@ -313,6 +322,15 @@ def check_can_interface(interface: str) -> bool:
         return False
 
 
+def _vec_to_reorder_mat(vec: list) -> np.ndarray:
+    """Axis permutation/flip matrix from signed-index vector (from droid VRPolicy)."""
+    X = np.zeros((len(vec), len(vec)))
+    for i in range(len(vec)):
+        ind = int(abs(vec[i])) - 1
+        X[i, ind] = np.sign(vec[i])
+    return X
+
+
 def spacemouse_to_target_pose(
     state,
     T_current: np.ndarray,
@@ -366,6 +384,7 @@ class RobotController:
         use_left_leader: bool = True,
         use_right_follower: bool = True,
         use_left_follower: bool = True,
+        follower_home_pos: Optional[np.ndarray] = None,
     ):
         """Initialize robot controller
 
@@ -374,7 +393,13 @@ class RobotController:
             use_left_leader: Initialize left leader arm
             use_right_follower: Initialize right follower arm
             use_left_follower: Initialize left follower arm
+            follower_home_pos: 7-DOF home position [j1..j6, gripper] the arm returns
+                to at the end of each episode.  Defaults to all-zeros + gripper open.
+                Set this to a safe resting pose for brakeless arms.
         """
+        self._follower_home_pos = (
+            follower_home_pos if follower_home_pos is not None else FOLLOWER_HOME_POS.copy()
+        )
         self.use_right_leader = use_right_leader
         self.use_left_leader = use_left_leader
         self.use_right_follower = use_right_follower
@@ -424,13 +449,13 @@ class RobotController:
         required_interfaces = []
 
         if self.use_right_follower:
-            required_interfaces.append("can_follower_r")
+            required_interfaces.append(_CAN_NAMES["follower_r"])
         if self.use_left_follower:
-            required_interfaces.append("can_follower_l")
+            required_interfaces.append(_CAN_NAMES["follower_l"])
         if self.use_right_leader:
-            required_interfaces.append("can_leader_r")
+            required_interfaces.append(_CAN_NAMES["leader_r"])
         if self.use_left_leader:
-            required_interfaces.append("can_leader_l")
+            required_interfaces.append(_CAN_NAMES["leader_l"])
 
         missing_interfaces = []
         for interface in required_interfaces:
@@ -474,7 +499,7 @@ class RobotController:
             threads.append(
                 threading.Thread(
                     target=_init,
-                    args=("right follower", "can_follower_r", GripperType.LINEAR_4310),
+                    args=("right follower", _CAN_NAMES["follower_r"], GripperType.LINEAR_4310),
                     daemon=True,
                 )
             )
@@ -482,7 +507,7 @@ class RobotController:
             threads.append(
                 threading.Thread(
                     target=_init,
-                    args=("left follower", "can_follower_l", GripperType.LINEAR_4310),
+                    args=("left follower", _CAN_NAMES["follower_l"], GripperType.LINEAR_4310),
                     daemon=True,
                 )
             )
@@ -492,7 +517,7 @@ class RobotController:
                     target=_init,
                     args=(
                         "right leader",
-                        "can_leader_r",
+                        _CAN_NAMES["leader_r"],
                         GripperType.YAM_TEACHING_HANDLE,
                     ),
                     daemon=True,
@@ -504,7 +529,7 @@ class RobotController:
                     target=_init,
                     args=(
                         "left leader",
-                        "can_leader_l",
+                        _CAN_NAMES["leader_l"],
                         GripperType.YAM_TEACHING_HANDLE,
                     ),
                     daemon=True,
@@ -620,14 +645,14 @@ class RobotController:
                 threads.append(
                     threading.Thread(
                         target=move_to_home,
-                        args=(self.follower_r, FOLLOWER_HOME_POS, "right_follower"),
+                        args=(self.follower_r, self._follower_home_pos, "right_follower"),
                     )
                 )
             if self.follower_l:
                 threads.append(
                     threading.Thread(
                         target=move_to_home,
-                        args=(self.follower_l, FOLLOWER_HOME_POS, "left_follower"),
+                        args=(self.follower_l, self._follower_home_pos, "left_follower"),
                     )
                 )
             if self.leader_r:
@@ -653,10 +678,10 @@ class RobotController:
             # Sequential movement
             if self.follower_r:
                 print("  - Moving right follower...")
-                smooth_move_joints(self.follower_r, FOLLOWER_HOME_POS)
+                smooth_move_joints(self.follower_r, self._follower_home_pos)
             if self.follower_l:
                 print("  - Moving left follower...")
-                smooth_move_joints(self.follower_l, FOLLOWER_HOME_POS)
+                smooth_move_joints(self.follower_l, self._follower_home_pos)
             if self.leader_r:
                 print("  - Moving right leader...")
                 smooth_move_joints(self.leader_r._robot, LEADER_HOME_POS)
@@ -962,7 +987,7 @@ class RobotController:
             print("✓ Teleoperation active (followers will follow leaders)")
 
     def stop_teleoperation(self):
-        """Stop all teleoperation control loops (leader-follower and SpaceMouse)."""
+        """Stop all teleoperation control loops (leader-follower, SpaceMouse, Oculus)."""
         if hasattr(self, "_teleop_shutdown"):
             self._teleop_shutdown.set()
             if hasattr(self, "_teleop_threads"):
@@ -970,6 +995,7 @@ class RobotController:
                     thread.join(timeout=1.0)
                 self._teleop_threads.clear()
         self.stop_spacemouse_teleop()
+        self.stop_oculus_teleop()
 
     # -------------------------------------------------------------------------
     # SpaceMouse Cartesian velocity teleop
@@ -1008,6 +1034,8 @@ class RobotController:
 
         Stores results in ``self._prewarmed_ik`` keyed by side ("right"/"left").
         """
+        if getattr(self, "_prewarmed_ik", {}):
+            return  # already warmed up by setup_for_teleop_recording
         self._prewarmed_ik: dict = {}
         errors: dict = {}
         lock = threading.Lock()
@@ -1257,18 +1285,293 @@ class RobotController:
                 print(f"  SpaceMouse {side} loop error: {e}")
                 time.sleep(dt)
 
+    # -------------------------------------------------------------------------
+    # Oculus Quest Touch controller teleop
+    # -------------------------------------------------------------------------
+
+    def start_oculus_teleop(
+        self,
+        oculus_reader,
+        right_controller: bool = True,
+        spatial_coeff: float = 1.0,
+        pos_action_gain: float = 1.0,
+        rot_action_gain: float = 1.0,
+        rmat_reorder: Optional[list] = None,
+        dt: float = 0.02,
+        swap_controllers: bool = False,
+    ) -> None:
+        """Start Oculus Quest Touch controller Cartesian teleop thread.
+
+        Uses absolute-pose origin tracking: when the grip trigger is first pressed,
+        records the VR pose and robot EE pose as the origin pair.  Each subsequent
+        frame tracks the controller pose relative to that origin.
+
+        Args:
+            oculus_reader:    OculusReader instance (already started).
+            right_controller: If True, use right Touch controller; else left.
+            spatial_coeff:    Scale applied to VR translation (metres).
+            pos_action_gain:  Position multiplier — 1.0 = 1:1 mapping, 2.0 = 2x amplification.
+            rot_action_gain:  Rotation multiplier — 1.0 = 1:1 mapping.
+            rmat_reorder:     Axis permutation/flip, e.g. [-2, -1, -3, 4].
+            dt:               Control loop period in seconds (default 50 Hz).
+        """
+        if rmat_reorder is None:
+            rmat_reorder = [-2, -1, -3, 4]
+
+        if self.follower_l is None and self.follower_r is None:
+            raise RuntimeError("start_oculus_teleop() requires at least one follower arm.")
+
+        global_to_env_mat = _vec_to_reorder_mat(rmat_reorder)
+
+        self._oculus_shutdown = threading.Event()
+        self._oculus_threads: list = []
+
+        # Single-arm: right controller → left arm.
+        # Bimanual: right controller → left arm, left controller → right arm.
+        # swap_controllers reverses the ctrl_id assignment.
+        arms = []
+        if self.follower_l is not None:
+            ctrl = "l" if swap_controllers else "r"
+            arms.append(("left", self.follower_l, ctrl, "oculus-left"))
+        if self.follower_r is not None:
+            ctrl = "r" if swap_controllers else "l"
+            arms.append(("right", self.follower_r, ctrl, "oculus-right"))
+
+        # When facing the robot (default), the lateral (X) axis is mirrored
+        # relative to the user's frame and must be flipped. When standing
+        # behind (swap_controllers), the mapping is already correct.
+        flip_lateral = not swap_controllers
+
+        for side, follower, ctrl_id, thread_name in arms:
+            t = threading.Thread(
+                target=self._oculus_control_loop,
+                args=(side, follower, oculus_reader, ctrl_id,
+                      spatial_coeff, pos_action_gain, rot_action_gain,
+                      global_to_env_mat, dt, flip_lateral),
+                name=thread_name,
+                daemon=True,
+            )
+            t.start()
+            self._oculus_threads.append(t)
+        print(f"✓ Oculus teleop active ({len(arms)} arm(s))")
+
+    def stop_oculus_teleop(self) -> None:
+        """Stop Oculus teleop thread."""
+        if hasattr(self, "_oculus_shutdown"):
+            self._oculus_shutdown.set()
+            if hasattr(self, "_oculus_threads"):
+                for t in self._oculus_threads:
+                    t.join(timeout=1.0)
+                self._oculus_threads.clear()
+
+    def _oculus_control_loop(
+        self,
+        side: str,
+        follower,
+        oculus_reader,
+        controller_id: str,
+        spatial_coeff: float,
+        pos_action_gain: float,
+        rot_action_gain: float,
+        global_to_env_mat: np.ndarray,
+        dt: float,
+        flip_lateral: bool = False,
+    ) -> None:
+        """Absolute-pose origin-tracking + J-PARSE IK loop for one arm.
+
+        Coordinate frame pipeline (mirrors droid VRPolicy):
+            vr_mat = global_to_env_mat @ vr_to_global_mat @ raw_pose
+
+        Grip trigger (RG/LG) is a deadman — robot only moves while grip is held.
+        On grip press: VR pose and robot EE pose are latched as the origin pair.
+        On release: robot holds last commanded position with full PD stiffness.
+
+        Joystick button (RJ/LJ): re-enables one-shot orientation zeroing
+        (vr_to_global_mat = inv(raw_pose)) so the user can redefine "forward".
+
+        Right/left index trigger controls the gripper: 0 = open, 1 = closed.
+        """
+        prewarmed = getattr(self, "_prewarmed_ik", {}).get(side)
+        if prewarmed is not None:
+            pk_robot, link6_idx, step_jit = prewarmed
+        else:
+            print(f"  [Oculus {side}] Setting up J-PARSE IK (JIT warmup)...", flush=True)
+            pk_robot, link6_idx, step_jit = _setup_pyroki(dt)
+            print(f"  [Oculus {side}] IK ready.", flush=True)
+
+        _home_cfg = np.zeros(6, dtype=np.float64)
+
+        def _fk_tcp(q: np.ndarray) -> np.ndarray:
+            poses = pk_robot.forward_kinematics(jnp.asarray(q))
+            T_link6 = np.array(jaxlie.SE3(poses[link6_idx]).as_matrix())
+            return T_link6 @ _T_LINK6_TO_TCP
+
+        def _ik_step(q: np.ndarray, T_target_tcp: np.ndarray) -> np.ndarray:
+            T_target_link6 = T_target_tcp @ _T_TCP_TO_LINK6
+            target_pos = T_target_link6[:3, 3]
+            xyzw = Rotation.from_matrix(T_target_link6[:3, :3]).as_quat()
+            target_wxyz = np.array([xyzw[3], xyzw[0], xyzw[1], xyzw[2]])
+            q_new, _ = step_jit(
+                robot=pk_robot,
+                cfg=q.astype(np.float64),
+                target_link_index=link6_idx,
+                target_position=target_pos,
+                target_wxyz=target_wxyz,
+                method="jparse",
+                dt=dt,
+                home_cfg=_home_cfg,
+            )
+            return np.asarray(q_new)
+
+        # Seed virtual arm state from real robot (MuJoCo→pyroki order).
+        q_full_init = follower.get_joint_pos()
+        q_arm = q_full_init[:6][::-1].copy()
+        gripper = q_full_init[6]
+
+        hold_pos: Optional[np.ndarray] = None
+        was_paused = False
+
+        grip_key = controller_id.upper() + "G"
+        joystick_key = controller_id.upper() + "J"
+        trig_key = "rightTrig" if controller_id == "r" else "leftTrig"
+
+        vr_to_global_mat: np.ndarray = np.eye(4)
+        reset_orientation: bool = True  # continuously update until first grip press
+        vr_origin_mat: Optional[np.ndarray] = None
+        raw_pose_origin: Optional[np.ndarray] = None
+        robot_origin_T: Optional[np.ndarray] = None
+        prev_grip: bool = False
+
+        while not self._oculus_shutdown.is_set():
+            try:
+                loop_start = time.monotonic()
+
+                # --- soft pause (footpedal e-stop) ---
+                now_paused = time.monotonic() < self._pause_until
+                if now_paused:
+                    if not was_paused:
+                        hold_pos = follower.get_joint_pos().copy()
+                        was_paused = True
+                    follower.command_joint_pos(hold_pos)
+                    time.sleep(dt)
+                    continue
+
+                if self._session_estop_event.is_set():
+                    break
+
+                if was_paused:
+                    q_full_resync = follower.get_joint_pos()
+                    q_arm = q_full_resync[:6][::-1].copy()
+                    gripper = q_full_resync[6]
+                    # Force re-latch of origins on next grip press after pause.
+                    vr_origin_mat = None
+                    robot_origin_T = None
+                was_paused = False
+
+                # --- read controller ---
+                poses, buttons = oculus_reader.get_transformations_and_buttons()
+                if not poses or controller_id not in poses:
+                    time.sleep(dt)
+                    continue
+
+                grip = bool(buttons.get(grip_key, False))
+                joystick_click = bool(buttons.get(joystick_key, False))
+                trig_val = float(buttons.get(trig_key, [0.0])[0])
+                raw_pose = np.asarray(poses[controller_id], dtype=np.float64)
+
+                # --- orientation zeroing (mirrors droid _update_internal_state) ---
+                # Joystick press re-enables one-shot update of vr_to_global_mat.
+                if joystick_click:
+                    reset_orientation = True
+                stop_updating = joystick_click or grip
+                if reset_orientation:
+                    try:
+                        vr_to_global_mat = np.linalg.inv(raw_pose)
+                    except np.linalg.LinAlgError:
+                        vr_to_global_mat = np.eye(4)
+                    else:
+                        if stop_updating:
+                            reset_orientation = False
+
+                vr_mat = global_to_env_mat @ vr_to_global_mat @ raw_pose
+
+                # --- grip rising-edge: latch origins ---
+                if grip and not prev_grip:
+                    vr_origin_mat = vr_mat.copy()
+                    raw_pose_origin = raw_pose.copy()
+                    robot_origin_T = _fk_tcp(q_arm).copy()
+                prev_grip = grip
+
+                # --- deadman: hold position when grip not held ---
+                if not grip:
+                    cmd = np.append(q_arm[::-1], gripper)
+                    follower.command_joint_pos(cmd)
+                    self._last_commanded_pos[side] = cmd.copy()
+                    elapsed = time.monotonic() - loop_start
+                    if dt - elapsed > 0:
+                        time.sleep(dt - elapsed)
+                    continue
+
+                if vr_origin_mat is None or robot_origin_T is None:
+                    time.sleep(dt)
+                    continue
+
+                # --- compute target EE pose ---
+                delta_pos = spatial_coeff * (vr_mat[:3, 3] - vr_origin_mat[:3, 3])
+                if flip_lateral:
+                    delta_pos[1] *= -1
+                target_pos = robot_origin_T[:3, 3] + pos_action_gain * delta_pos
+
+                # Compute R_rel in VR world frame (bypasses the vr_to_global body-frame
+                # wrapping that causes yaw/roll coupling when the controller is tilted
+                # at zero time), then project to robot world frame via P-conjugation.
+                # _R_fix swaps the VR X (wrist-roll) and VR Y (tilt) contributions so
+                # they land on the correct robot axes without disturbing the position
+                # mapping (which uses global_to_env_mat directly).
+                P = global_to_env_mat[:3, :3]
+                _R_fix = np.array([[0., 1., 0.], [-1., 0., 0.], [0., 0., 1.]])
+                P_rot = _R_fix @ P
+                R_delta_vr = raw_pose[:3, :3] @ raw_pose_origin[:3, :3].T
+                R_rel = P_rot @ R_delta_vr @ P_rot.T
+                angle_axis = Rotation.from_matrix(R_rel).as_rotvec() * rot_action_gain
+                if flip_lateral:
+                    angle_axis *= -1
+                target_rot = Rotation.from_rotvec(angle_axis).as_matrix() @ robot_origin_T[:3, :3]
+
+                T_target = np.eye(4)
+                T_target[:3, :3] = target_rot
+                T_target[:3, 3] = target_pos
+
+                # --- J-PARSE IK ---
+                q_arm = _ik_step(q_arm, T_target)
+
+                # --- gripper: index trigger 0=open→robot 1.0, 1=closed→robot 0.0 ---
+                gripper = float(np.clip(1.0 - trig_val, 0.0, 1.0))
+
+                cmd = np.append(q_arm[::-1], gripper)  # pyroki→MuJoCo
+                follower.command_joint_pos(cmd)
+                self._last_commanded_pos[side] = cmd.copy()
+
+                elapsed = time.monotonic() - loop_start
+                if dt - elapsed > 0:
+                    time.sleep(dt - elapsed)
+
+            except Exception as e:
+                print(f"  Oculus {side} loop error: {e}")
+                time.sleep(dt)
+
     def signal_ready_with_grippers(self) -> None:
         """Close then re-open both follower grippers once to signal system ready."""
         print("  - Signalling ready: closing and opening grippers...")
 
-        closed_pos = FOLLOWER_HOME_POS.copy()
+        closed_pos = self._follower_home_pos.copy()
         closed_pos[6] = 0.0  # closed
 
         def cycle(robot: Robot) -> None:
             for _ in range(2):
                 smooth_move_joints(robot, closed_pos, time_interval_s=0.1, steps=10)
                 smooth_move_joints(
-                    robot, FOLLOWER_HOME_POS, time_interval_s=0.1, steps=10
+                    robot, self._follower_home_pos, time_interval_s=0.1, steps=10
                 )
 
         threads = []
@@ -1335,6 +1638,38 @@ class RobotController:
         # Check CAN interfaces
         print("Checking CAN interfaces...")
         self.check_can_interfaces()
+
+        # Pre-warm JAX/pyroki IK *before* starting the motor threads.
+        # JAX tracing holds the GIL for several seconds on first run; if it
+        # runs while motors are active the DM watchdog fires (loss communication).
+        if not getattr(self, "_prewarmed_ik", {}):
+            print("Pre-warming IK (JAX JIT, ~5 s on first run)...")
+            errors: dict = {}
+            lock = threading.Lock()
+            result: dict = {}
+
+            def _warm(side: str) -> None:
+                try:
+                    r = _setup_pyroki(0.01)
+                    with lock:
+                        result[side] = r
+                except Exception as exc:
+                    with lock:
+                        errors[side] = exc
+
+            threads = []
+            if self.use_left_follower or self.use_right_follower:
+                threads.append(threading.Thread(target=_warm, args=("left",), daemon=True))
+            if self.use_right_follower:
+                threads.append(threading.Thread(target=_warm, args=("right",), daemon=True))
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+            if errors:
+                raise RuntimeError(f"IK pre-warm failed: {errors}")
+            self._prewarmed_ik = result
+            print("✓ IK ready")
 
         # Initialize robots
         self.initialize_robots(gravity_comp_mode=False)

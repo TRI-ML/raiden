@@ -31,8 +31,8 @@ from raiden.visualizer import select_task_and_episode, visualize_recording
 class TeleopCommand:
     """Start bimanual teleoperation with improved synchronization"""
 
-    control: Literal["leader", "spacemouse"] = "leader"
-    """Control mode: leader-follower arms or SpaceMouse EE velocity control"""
+    control: Literal["leader", "spacemouse", "oculus"] = "leader"
+    """Control mode: leader-follower arms, SpaceMouse EE velocity, or Oculus Touch"""
 
     arms: Literal["bimanual", "single"] = "bimanual"
     """Which arms to use: both (bimanual) or left arm only (single)"""
@@ -55,13 +55,34 @@ class TeleopCommand:
     invert_rotation: bool = False
     """Negate all SpaceMouse rotation axes (spacemouse mode only)"""
 
+    oculus_right_controller: bool = True
+    """Use right Touch controller to drive the arm (oculus mode only)"""
+
+    oculus_spatial_coeff: float = 1.0
+    """Scale applied to VR position delta before feeding into IK (oculus mode only)"""
+
+    oculus_pos_action_gain: float = 1.0
+    """Position multiplier: 1.0 = 1:1 tracking, 2.0 = 2x sensitivity (oculus mode only)"""
+
+    oculus_rot_action_gain: float = 1.0
+    """Rotation multiplier applied to relative VR rotation (oculus mode only)"""
+
+    oculus_rmat_reorder: List[int] = field(default_factory=lambda: [-2, -1, -3, 4])
+    """Axis permutation/flip vector mapping VR frame to robot frame (oculus mode only)"""
+
+    oculus_swap_controllers: bool = False
+    """Swap which Touch controller drives which arm: right→right arm, left→left arm (oculus mode only)"""
+
+    follower_home_pos: Optional[List[float]] = None
+    """7-DOF home position [j1..j6, gripper] the arm parks at on exit (all modes)"""
+
 
 @dataclass
 class RecordCommand:
     """Record a demonstration with cameras and robot data"""
 
-    control: Literal["leader", "spacemouse"] = "leader"
-    """Control mode: leader-follower arms or SpaceMouse EE velocity control"""
+    control: Literal["leader", "spacemouse", "oculus"] = "leader"
+    """Control mode: leader-follower arms, SpaceMouse EE velocity, or Oculus Touch"""
 
     data_dir: str = "data"
     """Root data directory (default: ./data); episodes go to <data_dir>/raw/<task>/"""
@@ -89,6 +110,27 @@ class RecordCommand:
 
     arms: Literal["bimanual", "single"] = "bimanual"
     """Which arms to use: both (bimanual) or left arm only (single)"""
+
+    oculus_right_controller: bool = True
+    """Use right Touch controller to drive the arm (oculus mode only)"""
+
+    oculus_spatial_coeff: float = 1.0
+    """Scale applied to VR position delta before feeding into IK (oculus mode only)"""
+
+    oculus_pos_action_gain: float = 1.0
+    """Position multiplier: 1.0 = 1:1 tracking, 2.0 = 2x sensitivity (oculus mode only)"""
+
+    oculus_rot_action_gain: float = 1.0
+    """Rotation multiplier applied to relative VR rotation (oculus mode only)"""
+
+    oculus_rmat_reorder: List[int] = field(default_factory=lambda: [-2, -1, -3, 4])
+    """Axis permutation/flip vector mapping VR frame to robot frame (oculus mode only)"""
+
+    oculus_swap_controllers: bool = False
+    """Swap which Touch controller drives which arm: right→right arm, left→left arm (oculus mode only)"""
+
+    follower_home_pos: Optional[List[float]] = None
+    """7-DOF home position [j1..j6, gripper] the arm parks at on exit (all modes)"""
 
 
 _CAN_BITRATE = 1000000
@@ -455,6 +497,13 @@ def main():
                 rot_scale=command.rot_scale,
                 invert_rotation=command.invert_rotation,
                 arms=command.arms,
+                oculus_right_controller=command.oculus_right_controller,
+                oculus_spatial_coeff=command.oculus_spatial_coeff,
+                oculus_pos_action_gain=command.oculus_pos_action_gain,
+                oculus_rot_action_gain=command.oculus_rot_action_gain,
+                oculus_rmat_reorder=command.oculus_rmat_reorder,
+                oculus_swap_controllers=command.oculus_swap_controllers,
+                follower_home_pos=command.follower_home_pos,
             )  # teleop builds its own interface internally via build_interface()
 
         elif subcommand == "record":
@@ -478,9 +527,16 @@ def main():
                     vel_scale=command.vel_scale,
                     rot_scale=command.rot_scale,
                     invert_rotation=command.invert_rotation,
+                    oculus_right_controller=command.oculus_right_controller,
+                    oculus_spatial_coeff=command.oculus_spatial_coeff,
+                    oculus_pos_action_gain=command.oculus_pos_action_gain,
+                    oculus_rot_action_gain=command.oculus_rot_action_gain,
+                    oculus_rmat_reorder=command.oculus_rmat_reorder,
+                    oculus_swap_controllers=command.oculus_swap_controllers,
                 ),
                 arms=command.arms,
                 data_dir=command.data_dir,
+                follower_home_pos=command.follower_home_pos,
             )
 
         elif subcommand == "replay":

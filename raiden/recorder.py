@@ -681,6 +681,7 @@ def run_recording(
     calibration_file: str = CALIBRATION_FILE,
     arms: str = "bimanual",
     data_dir: str = "data",
+    follower_home_pos: Optional[list] = None,
 ) -> None:
     """Run teleoperation with continuous demonstration recording.
 
@@ -749,6 +750,11 @@ def run_recording(
     def emergency_stop(signum, frame):
         if _active_ctrl[0] is not None:
             _active_ctrl[0].emergency_stop()
+        else:
+            # No active controller (between episodes) — exit immediately.
+            print("\nCancelled.")
+            import os as _os
+            _os._exit(0)
 
     signal.signal(signal.SIGTERM, emergency_stop)
     signal.signal(signal.SIGINT, emergency_stop)
@@ -764,6 +770,8 @@ def run_recording(
     use_right = arms == "bimanual"
     use_left = True
 
+    _home_pos_arr = np.array(follower_home_pos) if follower_home_pos is not None else None
+
     try:
         while True:
             recorder = None
@@ -774,6 +782,7 @@ def run_recording(
                 use_left_leader=interface.uses_leaders and use_left,
                 use_right_follower=use_right,
                 use_left_follower=use_left,
+                follower_home_pos=_home_pos_arr,
             )
             _active_ctrl[0] = robot_controller
 
@@ -797,7 +806,11 @@ def run_recording(
             print("=" * 60)
             print(f"\n  Data dir   : {task_dir}")
             if interface.waits_for_button_start:
-                print("\n  Press button on any leader arm or left pedal to START.")
+                start_hint = getattr(interface, "start_hint", None)
+                if start_hint:
+                    print(f"\n  {start_hint}")
+                else:
+                    print("\n  Press button on any leader arm or left pedal to START.")
             else:
                 print("\n  Press Enter or left pedal to START recording.")
             print("  Press 'q' to end session.\n")

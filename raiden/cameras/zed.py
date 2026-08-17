@@ -3,7 +3,7 @@
 Recording mode  : opens by serial number, records to SVO2 (H264).
                   Depth is NOT computed during recording (depth_mode=NONE)
                   for lower CPU usage; the raw stereo pair is stored instead.
-Playback mode   : opens an SVO2 file, computes depth (NEURAL) for each frame.
+Playback mode   : opens an SVO2 file, computes depth (NEURAL_LIGHT) for each frame.
                   Use ZedCamera.from_svo() to create a playback instance.
 """
 

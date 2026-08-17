@@ -32,6 +32,7 @@ dependencies = [
   "onnxscript>=0.6.2",
   "chiral",
   "pyyaml>=6.0.3",
+  "oculus-reader",
 ]
 
 [project.optional-dependencies]
@@ -54,9 +55,10 @@ rd = "raiden.cli:main"
 
 [tool.uv.sources]
 i2rt = { path = "third_party/i2rt" }
-pyzed = { path = "packages/pyzed-5.2-cp311-cp311-linux_x86_64.whl" }
+pyzed = { path = "packages/pyzed-5.3-cp311-cp311-linux_x86_64.whl" }
 pyroki = { git = "https://github.com/chungmin99/pyroki.git" }
 chiral = { git = "ssh://git@github.com/TRI-ML/chiral" }
+oculus-reader = { git = "https://github.com/rail-berkeley/oculus_reader.git" }
 
 [tool.ruff]
 exclude = ["third_party/"]
