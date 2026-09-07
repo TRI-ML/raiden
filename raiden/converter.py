@@ -128,6 +128,7 @@ def _extract_svo2_synchronized(
     ffs_scale: float = 1.0,
     ffs_iters: int = 8,
     tri_stereo_variant: str = "c64",
+    compute_depth: bool = True,
 ) -> Dict[str, Tuple[np.ndarray, Optional[dict]]]:
     """Extract frames from multiple SVO2 files with cross-camera temporal alignment.
 
@@ -146,11 +147,13 @@ def _extract_svo2_synchronized(
     """
     from raiden.cameras.zed import ZedCamera
 
-    for d in rgb_dirs + depth_dirs:
+    for d in rgb_dirs + (depth_dirs if compute_depth else []):
         d.mkdir(parents=True, exist_ok=True)
 
-    use_ffs = stereo_method == "ffs"
-    use_tri_stereo = stereo_method == "tri_stereo"
+    # compute_depth=False skips the whole depth path (no ZED NEURAL pass, no learned-stereo
+    # predictor, no depth write) — RGB + lowdim only, which is all the training materializers read.
+    use_ffs = compute_depth and stereo_method == "ffs"
+    use_tri_stereo = compute_depth and stereo_method == "tri_stereo"
     use_learned_stereo = use_ffs or use_tri_stereo
 
     # Lazily create a shared depth predictor (one instance, GPU-loaded once).
@@ -195,7 +198,7 @@ def _extract_svo2_synchronized(
     # Open all cameras.
     cams: Dict[str, ZedCamera] = {
         name: ZedCamera.from_svo(
-            name, svo_path, compute_sdk_depth=not use_learned_stereo
+            name, svo_path, compute_sdk_depth=compute_depth and not use_learned_stereo
         )
         for name, svo_path in zip(names, svo_paths)
     }
@@ -268,23 +271,24 @@ def _extract_svo2_synchronized(
             color = cv2.rotate(frame.color, cv2.ROTATE_180) if flip else frame.color
             cv2.imwrite(str(rgb_dir_map[name] / f"{frame_idx:010d}{_IMG_EXT}"), color)
 
-            if use_learned_stereo:
-                fx, baseline = stereo_calib[name]
-                # Run inference on raw (pre-rotation) images — the ZED rectifies
-                # them in the sensor frame; rotating before inference only adds noise.
-                depth_m = depth_predictor.predict(
-                    frame.color, cam.get_right_color(), fx, baseline
+            if compute_depth:
+                if use_learned_stereo:
+                    fx, baseline = stereo_calib[name]
+                    # Run inference on raw (pre-rotation) images — the ZED rectifies
+                    # them in the sensor frame; rotating before inference only adds noise.
+                    depth_m = depth_predictor.predict(
+                        frame.color, cam.get_right_color(), fx, baseline
+                    )
+                    if flip:
+                        depth_m = cv2.rotate(depth_m, cv2.ROTATE_180)
+                    depth_mm = (depth_m * 1000.0).clip(0, 65535).astype(np.uint16)
+                else:
+                    depth_mm = (frame.depth * 1000.0).clip(0, 65535).astype(np.uint16)
+                    if flip:
+                        depth_mm = cv2.rotate(depth_mm, cv2.ROTATE_180)
+                np.savez_compressed(
+                    str(depth_dir_map[name] / f"{frame_idx:010d}.npz"), depth=depth_mm
                 )
-                if flip:
-                    depth_m = cv2.rotate(depth_m, cv2.ROTATE_180)
-                depth_mm = (depth_m * 1000.0).clip(0, 65535).astype(np.uint16)
-            else:
-                depth_mm = (frame.depth * 1000.0).clip(0, 65535).astype(np.uint16)
-                if flip:
-                    depth_mm = cv2.rotate(depth_mm, cv2.ROTATE_180)
-            np.savez_compressed(
-                str(depth_dir_map[name] / f"{frame_idx:010d}.npz"), depth=depth_mm
-            )
 
             timestamps[name].append(frame.timestamp_ns)
 
@@ -847,6 +851,7 @@ def _build_sequence_metadata(
     frame_counts: Dict[str, int],
     rec_meta: dict,
     camera_infos: Dict[str, Optional[dict]],
+    compute_depth: bool = True,
 ) -> None:
     """Write metadata.json inside the sequence directory."""
     resolutions = {
@@ -868,7 +873,8 @@ def _build_sequence_metadata(
             "raw_id": rec_meta.get("timestamp", ""),
             "tags": ["robotics"],
         },
-        "labels": ["rgb", "depth", "action", "language"],
+        "labels": (["rgb", "depth", "action", "language"] if compute_depth
+                   else ["rgb", "action", "language"]),
         "cameras": cameras,
         "resolution": resolution,
         "framerate": rec_meta.get("camera_fps", 30),
@@ -884,6 +890,8 @@ def _build_sequence_metadata(
         "action": {"format": "joint_cmd", "dims": 14},
         "control": rec_meta.get("control", "leader"),
     }
+    if not compute_depth:
+        meta.pop("depth", None)   # no depth/ was written; don't advertise a stream that isn't there
 
     with open(seq_dir / "metadata.json", "w") as f:
         json.dump(meta, f, indent=2)
@@ -957,6 +965,7 @@ def convert_recording(
     ffs_iters: int = 8,
     tri_stereo_variant: str = "c64",
     reconvert: bool = False,
+    compute_depth: bool = True,
 ) -> Dict[str, int]:
     """Convert a recording directory to UnifiedDataset format.
 
@@ -1090,6 +1099,7 @@ def convert_recording(
             ffs_scale=ffs_scale,
             ffs_iters=ffs_iters,
             tri_stereo_variant=tri_stereo_variant,
+            compute_depth=compute_depth,
         )
         for name, (ts_arr, info) in sync_results.items():
             frame_counts[name] = len(ts_arr)
@@ -1201,7 +1211,8 @@ def convert_recording(
     print(f"  ✓ lowdim/ ({n_min} frames)")
 
     # ── sequence metadata ─────────────────────────────────────────────────
-    _build_sequence_metadata(seq_dir, cameras, frame_counts, rec_meta, camera_infos)
+    _build_sequence_metadata(seq_dir, cameras, frame_counts, rec_meta, camera_infos,
+                             compute_depth=compute_depth)
     print("  ✓ metadata.json")
 
     if episode_dir is None:
