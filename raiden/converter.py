@@ -1250,6 +1250,7 @@ def convert_task(
     reconvert: bool = False,
     processed_base: Optional[str] = None,
     tri_stereo_variant: str = "c64",
+    compute_depth: bool = True,
 ) -> None:
     """Convert all recordings in a task directory into a single UnifiedDataset.
 
@@ -1346,6 +1347,7 @@ def convert_task(
             ffs_iters=ffs_iters,
             tri_stereo_variant=tri_stereo_variant,
             reconvert=reconvert,
+            compute_depth=compute_depth,
         )
 
         if counts:
