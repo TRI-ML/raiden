@@ -1339,16 +1339,23 @@ def convert_task(
         episode_name = f"{i:04d}"
         ep_dir = out_base / episode_name
         print(f"[{i + 1}/{len(success_dirs)}] {rec_dir.name} → {episode_name}/")
-        counts = convert_recording(
-            str(rec_dir),
-            episode_dir=str(ep_dir),
-            stereo_method=stereo_method,
-            ffs_scale=ffs_scale,
-            ffs_iters=ffs_iters,
-            tri_stereo_variant=tri_stereo_variant,
-            reconvert=reconvert,
-            compute_depth=compute_depth,
-        )
+        try:
+            counts = convert_recording(
+                str(rec_dir),
+                episode_dir=str(ep_dir),
+                stereo_method=stereo_method,
+                ffs_scale=ffs_scale,
+                ffs_iters=ffs_iters,
+                tri_stereo_variant=tri_stereo_variant,
+                reconvert=reconvert,
+                compute_depth=compute_depth,
+            )
+        except Exception as e:
+            # A single corrupt/invalid recording (e.g. truncated or unreadable SVO2) must not abort
+            # the whole task — skip it loudly and continue with the rest.
+            print(f"  !! SKIPPING {rec_dir.name} -> {episode_name}/: {type(e).__name__}: {e}")
+            shutil.rmtree(ep_dir, ignore_errors=True)
+            continue
 
         if counts:
             episode_frame_counts[episode_name] = max(counts.values())
