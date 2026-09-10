@@ -7,6 +7,7 @@ Playback mode   : opens an SVO2 file, computes depth (NEURAL) for each frame.
                   Use ZedCamera.from_svo() to create a playback instance.
 """
 
+import os
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -144,6 +145,12 @@ class ZedCamera(Camera):
         init_params = sl.InitParameters()
         init_params.set_from_svo_file(str(svo_path))
         init_params.svo_real_time_mode = False  # process all frames
+        # Where the SDK reads/caches per-serial factory calibration. Defaults to
+        # /usr/local/zed/settings (root install); set this env to a writable dir for a
+        # rootless SDK so calibration can be downloaded/cached there.
+        _zed_settings = os.environ.get("ZED_OPTIONAL_SETTINGS_PATH")
+        if _zed_settings:
+            init_params.optional_settings_path = _zed_settings
         init_params.depth_mode = (
             sl.DEPTH_MODE.NEURAL_LIGHT if compute_sdk_depth else sl.DEPTH_MODE.NONE
         )
