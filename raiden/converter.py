@@ -116,6 +116,30 @@ def _count_svo2_frames(svo_path: Path) -> int:
     return n
 
 
+def _check_initial_grabs(active: Dict[str, bool], total_frames: Dict[str, int]) -> None:
+    """A stream whose FIRST grab fails is unreadable (the svo2 index may still report frames — a
+    truncated/corrupt payload). Fail loudly here instead of extracting 0 frames and crashing later in
+    lowdim with a negative frame count."""
+    dead = [n for n, ok in active.items() if not ok]
+    if dead:
+        raise RuntimeError(
+            "unreadable svo2 stream(s) — grab failed at frame 0: "
+            + ", ".join(
+                f"{n} (index reports {total_frames.get(n)} frames)" for n in dead
+            )
+        )
+
+
+def _check_aligned_frames(frame_counts: Dict[str, int]) -> int:
+    """Return the common (min) frame count; raise if alignment left no frames (or a negative count)."""
+    n_min = min(frame_counts.values()) if frame_counts else 0
+    if n_min <= 0:
+        raise RuntimeError(
+            f"no aligned frames after camera synchronization: {frame_counts}"
+        )
+    return n_min
+
+
 def _extract_svo2_synchronized(
     svo_paths: List[Path],
     names: List[str],
@@ -220,6 +244,7 @@ def _extract_svo2_synchronized(
 
     # Initial grab.
     active = {name: cam.grab() for name, cam in cams.items()}
+    _check_initial_grabs(active, total_frames)
 
     # Each ZED camera has an independent hardware clock, so absolute timestamps
     # cannot be compared across cameras.  Record each camera's first-frame
@@ -304,6 +329,10 @@ def _extract_svo2_synchronized(
 
     pbar.close()
     print(f"    {frame_idx} synchronized frames extracted")
+    if frame_idx == 0:
+        raise RuntimeError(
+            f"no synchronized frames could be extracted; per-camera totals {total_frames}"
+        )
     if use_learned_stereo and depth_predictor._n_calls > 0:
         label = "FFS" if use_ffs else f"TRIStereo-{tri_stereo_variant.upper()}"
         print(f"  {label} timing: {depth_predictor.timing_summary()}")
@@ -852,6 +881,7 @@ def _build_sequence_metadata(
     rec_meta: dict,
     camera_infos: Dict[str, Optional[dict]],
     compute_depth: bool = True,
+    svo2_frame_counts: Optional[Dict[str, int]] = None,
 ) -> None:
     """Write metadata.json inside the sequence directory."""
     resolutions = {
@@ -873,8 +903,11 @@ def _build_sequence_metadata(
             "raw_id": rec_meta.get("timestamp", ""),
             "tags": ["robotics"],
         },
-        "labels": (["rgb", "depth", "action", "language"] if compute_depth
-                   else ["rgb", "action", "language"]),
+        "labels": (
+            ["rgb", "depth", "action", "language"]
+            if compute_depth
+            else ["rgb", "action", "language"]
+        ),
         "cameras": cameras,
         "resolution": resolution,
         "framerate": rec_meta.get("camera_fps", 30),
@@ -891,7 +924,13 @@ def _build_sequence_metadata(
         "control": rec_meta.get("control", "leader"),
     }
     if not compute_depth:
-        meta.pop("depth", None)   # no depth/ was written; don't advertise a stream that isn't there
+        meta.pop(
+            "depth", None
+        )  # no depth/ was written; don't advertise a stream that isn't there
+    if svo2_frame_counts:
+        # raw per-camera svo2 index totals vs the common count every stream was aligned/trimmed to
+        meta["svo2_frame_counts"] = dict(svo2_frame_counts)
+        meta["aligned_frame_count"] = min(frame_counts.values()) if frame_counts else 0
 
     with open(seq_dir / "metadata.json", "w") as f:
         json.dump(meta, f, indent=2)
@@ -1054,6 +1093,9 @@ def convert_recording(
         for name in svo2_names
     )
 
+    svo2_pre_counts: Dict[
+        str, int
+    ] = {}  # per-camera svo2 index totals (recorded in metadata.json)
     if svo2_all_done:
         for name in svo2_names:
             rgb_dir = seq_dir / "rgb" / name
@@ -1064,7 +1106,7 @@ def convert_recording(
             cam_timestamps[name] = np.load(str(rgb_dir / "timestamps.npy"))
     elif svo2_files:
         # Pre-scan to determine the min frame count cap.
-        pre_counts: Dict[str, int] = {}
+        pre_counts = svo2_pre_counts
         for svo_path in svo2_files:
             name = svo_path.stem
             rgb_dir_check = seq_dir / "rgb" / name
@@ -1162,7 +1204,7 @@ def convert_recording(
 
     # Trim all cameras to the same (minimum) frame count.
     if frame_counts:
-        n_min = min(frame_counts.values())
+        n_min = _check_aligned_frames(frame_counts)
         frame_counts = {k: n_min for k in frame_counts}
         cam_timestamps = {
             k: (ts[:n_min] if ts is not None else None)
@@ -1211,8 +1253,15 @@ def convert_recording(
     print(f"  ✓ lowdim/ ({n_min} frames)")
 
     # ── sequence metadata ─────────────────────────────────────────────────
-    _build_sequence_metadata(seq_dir, cameras, frame_counts, rec_meta, camera_infos,
-                             compute_depth=compute_depth)
+    _build_sequence_metadata(
+        seq_dir,
+        cameras,
+        frame_counts,
+        rec_meta,
+        camera_infos,
+        compute_depth=compute_depth,
+        svo2_frame_counts=svo2_pre_counts or None,
+    )
     print("  ✓ metadata.json")
 
     if episode_dir is None:
@@ -1353,7 +1402,9 @@ def convert_task(
         except Exception as e:
             # A single corrupt/invalid recording (e.g. truncated or unreadable SVO2) must not abort
             # the whole task — skip it loudly and continue with the rest.
-            print(f"  !! SKIPPING {rec_dir.name} -> {episode_name}/: {type(e).__name__}: {e}")
+            print(
+                f"  !! SKIPPING {rec_dir.name} -> {episode_name}/: {type(e).__name__}: {e}"
+            )
             shutil.rmtree(ep_dir, ignore_errors=True)
             continue
 
