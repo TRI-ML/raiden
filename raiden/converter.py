@@ -116,6 +116,30 @@ def _count_svo2_frames(svo_path: Path) -> int:
     return n
 
 
+def _check_initial_grabs(active: Dict[str, bool], total_frames: Dict[str, int]) -> None:
+    """A stream whose FIRST grab fails is unreadable (the svo2 index may still report frames — a
+    truncated/corrupt payload). Fail loudly here instead of extracting 0 frames and crashing later in
+    lowdim with a negative frame count."""
+    dead = [n for n, ok in active.items() if not ok]
+    if dead:
+        raise RuntimeError(
+            "unreadable svo2 stream(s) — grab failed at frame 0: "
+            + ", ".join(
+                f"{n} (index reports {total_frames.get(n)} frames)" for n in dead
+            )
+        )
+
+
+def _check_aligned_frames(frame_counts: Dict[str, int]) -> int:
+    """Return the common (min) frame count; raise if alignment left no frames (or a negative count)."""
+    n_min = min(frame_counts.values()) if frame_counts else 0
+    if n_min <= 0:
+        raise RuntimeError(
+            f"no aligned frames after camera synchronization: {frame_counts}"
+        )
+    return n_min
+
+
 def _extract_svo2_synchronized(
     svo_paths: List[Path],
     names: List[str],
@@ -128,6 +152,7 @@ def _extract_svo2_synchronized(
     ffs_scale: float = 1.0,
     ffs_iters: int = 8,
     tri_stereo_variant: str = "c64",
+    compute_depth: bool = True,
 ) -> Dict[str, Tuple[np.ndarray, Optional[dict]]]:
     """Extract frames from multiple SVO2 files with cross-camera temporal alignment.
 
@@ -146,11 +171,13 @@ def _extract_svo2_synchronized(
     """
     from raiden.cameras.zed import ZedCamera
 
-    for d in rgb_dirs + depth_dirs:
+    for d in rgb_dirs + (depth_dirs if compute_depth else []):
         d.mkdir(parents=True, exist_ok=True)
 
-    use_ffs = stereo_method == "ffs"
-    use_tri_stereo = stereo_method == "tri_stereo"
+    # compute_depth=False skips the whole depth path (no ZED NEURAL pass, no learned-stereo
+    # predictor, no depth write) — RGB + lowdim only, which is all the training materializers read.
+    use_ffs = compute_depth and stereo_method == "ffs"
+    use_tri_stereo = compute_depth and stereo_method == "tri_stereo"
     use_learned_stereo = use_ffs or use_tri_stereo
 
     # Lazily create a shared depth predictor (one instance, GPU-loaded once).
@@ -195,7 +222,7 @@ def _extract_svo2_synchronized(
     # Open all cameras.
     cams: Dict[str, ZedCamera] = {
         name: ZedCamera.from_svo(
-            name, svo_path, compute_sdk_depth=not use_learned_stereo
+            name, svo_path, compute_sdk_depth=compute_depth and not use_learned_stereo
         )
         for name, svo_path in zip(names, svo_paths)
     }
@@ -217,6 +244,7 @@ def _extract_svo2_synchronized(
 
     # Initial grab.
     active = {name: cam.grab() for name, cam in cams.items()}
+    _check_initial_grabs(active, total_frames)
 
     # Each ZED camera has an independent hardware clock, so absolute timestamps
     # cannot be compared across cameras.  Record each camera's first-frame
@@ -268,23 +296,24 @@ def _extract_svo2_synchronized(
             color = cv2.rotate(frame.color, cv2.ROTATE_180) if flip else frame.color
             cv2.imwrite(str(rgb_dir_map[name] / f"{frame_idx:010d}{_IMG_EXT}"), color)
 
-            if use_learned_stereo:
-                fx, baseline = stereo_calib[name]
-                # Run inference on raw (pre-rotation) images — the ZED rectifies
-                # them in the sensor frame; rotating before inference only adds noise.
-                depth_m = depth_predictor.predict(
-                    frame.color, cam.get_right_color(), fx, baseline
+            if compute_depth:
+                if use_learned_stereo:
+                    fx, baseline = stereo_calib[name]
+                    # Run inference on raw (pre-rotation) images — the ZED rectifies
+                    # them in the sensor frame; rotating before inference only adds noise.
+                    depth_m = depth_predictor.predict(
+                        frame.color, cam.get_right_color(), fx, baseline
+                    )
+                    if flip:
+                        depth_m = cv2.rotate(depth_m, cv2.ROTATE_180)
+                    depth_mm = (depth_m * 1000.0).clip(0, 65535).astype(np.uint16)
+                else:
+                    depth_mm = (frame.depth * 1000.0).clip(0, 65535).astype(np.uint16)
+                    if flip:
+                        depth_mm = cv2.rotate(depth_mm, cv2.ROTATE_180)
+                np.savez_compressed(
+                    str(depth_dir_map[name] / f"{frame_idx:010d}.npz"), depth=depth_mm
                 )
-                if flip:
-                    depth_m = cv2.rotate(depth_m, cv2.ROTATE_180)
-                depth_mm = (depth_m * 1000.0).clip(0, 65535).astype(np.uint16)
-            else:
-                depth_mm = (frame.depth * 1000.0).clip(0, 65535).astype(np.uint16)
-                if flip:
-                    depth_mm = cv2.rotate(depth_mm, cv2.ROTATE_180)
-            np.savez_compressed(
-                str(depth_dir_map[name] / f"{frame_idx:010d}.npz"), depth=depth_mm
-            )
 
             timestamps[name].append(frame.timestamp_ns)
 
@@ -300,6 +329,10 @@ def _extract_svo2_synchronized(
 
     pbar.close()
     print(f"    {frame_idx} synchronized frames extracted")
+    if frame_idx == 0:
+        raise RuntimeError(
+            f"no synchronized frames could be extracted; per-camera totals {total_frames}"
+        )
     if use_learned_stereo and depth_predictor._n_calls > 0:
         label = "FFS" if use_ffs else f"TRIStereo-{tri_stereo_variant.upper()}"
         print(f"  {label} timing: {depth_predictor.timing_summary()}")
@@ -847,6 +880,8 @@ def _build_sequence_metadata(
     frame_counts: Dict[str, int],
     rec_meta: dict,
     camera_infos: Dict[str, Optional[dict]],
+    compute_depth: bool = True,
+    svo2_frame_counts: Optional[Dict[str, int]] = None,
 ) -> None:
     """Write metadata.json inside the sequence directory."""
     resolutions = {
@@ -868,7 +903,11 @@ def _build_sequence_metadata(
             "raw_id": rec_meta.get("timestamp", ""),
             "tags": ["robotics"],
         },
-        "labels": ["rgb", "depth", "action", "language"],
+        "labels": (
+            ["rgb", "depth", "action", "language"]
+            if compute_depth
+            else ["rgb", "action", "language"]
+        ),
         "cameras": cameras,
         "resolution": resolution,
         "framerate": rec_meta.get("camera_fps", 30),
@@ -884,6 +923,14 @@ def _build_sequence_metadata(
         "action": {"format": "joint_cmd", "dims": 14},
         "control": rec_meta.get("control", "leader"),
     }
+    if not compute_depth:
+        meta.pop(
+            "depth", None
+        )  # no depth/ was written; don't advertise a stream that isn't there
+    if svo2_frame_counts:
+        # raw per-camera svo2 index totals vs the common count every stream was aligned/trimmed to
+        meta["svo2_frame_counts"] = dict(svo2_frame_counts)
+        meta["aligned_frame_count"] = min(frame_counts.values()) if frame_counts else 0
 
     with open(seq_dir / "metadata.json", "w") as f:
         json.dump(meta, f, indent=2)
@@ -957,6 +1004,7 @@ def convert_recording(
     ffs_iters: int = 8,
     tri_stereo_variant: str = "c64",
     reconvert: bool = False,
+    compute_depth: bool = True,
 ) -> Dict[str, int]:
     """Convert a recording directory to UnifiedDataset format.
 
@@ -1045,6 +1093,9 @@ def convert_recording(
         for name in svo2_names
     )
 
+    svo2_pre_counts: Dict[
+        str, int
+    ] = {}  # per-camera svo2 index totals (recorded in metadata.json)
     if svo2_all_done:
         for name in svo2_names:
             rgb_dir = seq_dir / "rgb" / name
@@ -1055,7 +1106,7 @@ def convert_recording(
             cam_timestamps[name] = np.load(str(rgb_dir / "timestamps.npy"))
     elif svo2_files:
         # Pre-scan to determine the min frame count cap.
-        pre_counts: Dict[str, int] = {}
+        pre_counts = svo2_pre_counts
         for svo_path in svo2_files:
             name = svo_path.stem
             rgb_dir_check = seq_dir / "rgb" / name
@@ -1090,6 +1141,7 @@ def convert_recording(
             ffs_scale=ffs_scale,
             ffs_iters=ffs_iters,
             tri_stereo_variant=tri_stereo_variant,
+            compute_depth=compute_depth,
         )
         for name, (ts_arr, info) in sync_results.items():
             frame_counts[name] = len(ts_arr)
@@ -1152,7 +1204,7 @@ def convert_recording(
 
     # Trim all cameras to the same (minimum) frame count.
     if frame_counts:
-        n_min = min(frame_counts.values())
+        n_min = _check_aligned_frames(frame_counts)
         frame_counts = {k: n_min for k in frame_counts}
         cam_timestamps = {
             k: (ts[:n_min] if ts is not None else None)
@@ -1201,7 +1253,15 @@ def convert_recording(
     print(f"  ✓ lowdim/ ({n_min} frames)")
 
     # ── sequence metadata ─────────────────────────────────────────────────
-    _build_sequence_metadata(seq_dir, cameras, frame_counts, rec_meta, camera_infos)
+    _build_sequence_metadata(
+        seq_dir,
+        cameras,
+        frame_counts,
+        rec_meta,
+        camera_infos,
+        compute_depth=compute_depth,
+        svo2_frame_counts=svo2_pre_counts or None,
+    )
     print("  ✓ metadata.json")
 
     if episode_dir is None:
@@ -1239,6 +1299,7 @@ def convert_task(
     reconvert: bool = False,
     processed_base: Optional[str] = None,
     tri_stereo_variant: str = "c64",
+    compute_depth: bool = True,
 ) -> None:
     """Convert all recordings in a task directory into a single UnifiedDataset.
 
@@ -1327,15 +1388,25 @@ def convert_task(
         episode_name = f"{i:04d}"
         ep_dir = out_base / episode_name
         print(f"[{i + 1}/{len(success_dirs)}] {rec_dir.name} → {episode_name}/")
-        counts = convert_recording(
-            str(rec_dir),
-            episode_dir=str(ep_dir),
-            stereo_method=stereo_method,
-            ffs_scale=ffs_scale,
-            ffs_iters=ffs_iters,
-            tri_stereo_variant=tri_stereo_variant,
-            reconvert=reconvert,
-        )
+        try:
+            counts = convert_recording(
+                str(rec_dir),
+                episode_dir=str(ep_dir),
+                stereo_method=stereo_method,
+                ffs_scale=ffs_scale,
+                ffs_iters=ffs_iters,
+                tri_stereo_variant=tri_stereo_variant,
+                reconvert=reconvert,
+                compute_depth=compute_depth,
+            )
+        except Exception as e:
+            # A single corrupt/invalid recording (e.g. truncated or unreadable SVO2) must not abort
+            # the whole task — skip it loudly and continue with the rest.
+            print(
+                f"  !! SKIPPING {rec_dir.name} -> {episode_name}/: {type(e).__name__}: {e}"
+            )
+            shutil.rmtree(ep_dir, ignore_errors=True)
+            continue
 
         if counts:
             episode_frame_counts[episode_name] = max(counts.values())
